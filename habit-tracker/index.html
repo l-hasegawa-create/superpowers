@@ -1,0 +1,846 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <title>習慣トラッカー</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --orange: #E8490F;
+      --bg: #F0EFEB;
+      --card: #FFFFFF;
+      --text: #1A1A1A;
+      --muted: #888;
+      --border: #E0DDD8;
+      --check-border: #2A2A2A;
+    }
+
+    body {
+      font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      max-width: 430px;
+      margin: 0 auto;
+      position: relative;
+    }
+
+    /* ── Header ── */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 20px 8px;
+    }
+
+    .logo {
+      width: 48px;
+      height: 36px;
+      background: var(--orange);
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-weight: 900;
+      font-size: 18px;
+      letter-spacing: -1px;
+    }
+
+    .day-badge {
+      background: var(--orange);
+      color: white;
+      font-weight: 800;
+      font-size: 14px;
+      padding: 6px 14px;
+      border-radius: 8px;
+      letter-spacing: 0.5px;
+    }
+
+    /* ── Date Card ── */
+    .date-card {
+      margin: 8px 16px 0;
+      background: var(--card);
+      border-radius: 16px;
+      padding: 16px 20px 12px;
+    }
+
+    .date-label {
+      font-size: 15px;
+      font-weight: 500;
+      color: var(--text);
+      margin-bottom: 2px;
+    }
+
+    .time-display {
+      font-size: 44px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: -1px;
+      line-height: 1.1;
+    }
+
+    .stats-row {
+      display: flex;
+      gap: 24px;
+      position: absolute;
+      right: 20px;
+      top: 16px;
+    }
+
+    .stat-item {
+      text-align: center;
+    }
+
+    .stat-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--muted);
+      letter-spacing: 1px;
+    }
+
+    .stat-value {
+      font-size: 28px;
+      font-weight: 700;
+    }
+
+    .date-card-inner {
+      position: relative;
+    }
+
+    .progress-bar-wrap {
+      margin-top: 12px;
+      background: #ECEAE5;
+      border-radius: 99px;
+      height: 10px;
+      overflow: hidden;
+    }
+
+    .progress-bar-fill {
+      height: 100%;
+      background: var(--orange);
+      border-radius: 99px;
+      transition: width 0.4s ease;
+    }
+
+    .progress-label {
+      text-align: center;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+
+    /* ── Habits ── */
+    .habits-section {
+      flex: 1;
+      padding: 16px 16px 0;
+      overflow-y: auto;
+    }
+
+    .habit-item {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 16px 4px;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .habit-item:last-child { border-bottom: none; }
+
+    .habit-check {
+      width: 32px;
+      height: 32px;
+      border: 2.5px solid var(--check-border);
+      border-radius: 50%;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.2s, border-color 0.2s;
+    }
+
+    .habit-check.checked {
+      background: var(--orange);
+      border-color: var(--orange);
+    }
+
+    .habit-check.checked::after {
+      content: '';
+      width: 10px;
+      height: 6px;
+      border-left: 2.5px solid white;
+      border-bottom: 2.5px solid white;
+      transform: rotate(-45deg) translateY(-1px);
+    }
+
+    .habit-name {
+      font-size: 18px;
+      font-weight: 500;
+      flex: 1;
+      transition: opacity 0.2s;
+    }
+
+    .habit-name.done {
+      opacity: 0.4;
+      text-decoration: line-through;
+    }
+
+    /* ── Manage button ── */
+    .manage-btn {
+      display: block;
+      margin: 12px 16px;
+      padding: 12px;
+      background: transparent;
+      border: 2px dashed var(--border);
+      border-radius: 12px;
+      color: var(--muted);
+      font-size: 15px;
+      font-weight: 600;
+      text-align: center;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    /* ── Bottom nav ── */
+    .bottom-nav {
+      display: flex;
+      background: var(--card);
+      border-top: 1px solid var(--border);
+      padding: 8px 0 20px;
+      position: sticky;
+      bottom: 0;
+    }
+
+    .nav-item {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 3px;
+      padding: 6px 0;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+    }
+
+    .nav-item.active { color: var(--orange); }
+
+    .nav-icon {
+      width: 24px;
+      height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* ── Pages ── */
+    .page { display: none; flex: 1; flex-direction: column; overflow: hidden; }
+    .page.active { display: flex; }
+
+    /* ── Progress page ── */
+    .page-title {
+      font-size: 20px;
+      font-weight: 800;
+      padding: 20px 20px 12px;
+    }
+
+    .history-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0 16px 16px;
+    }
+
+    .history-day {
+      background: var(--card);
+      border-radius: 14px;
+      margin-bottom: 12px;
+      padding: 14px 16px;
+    }
+
+    .history-day-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+
+    .history-date {
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .history-score {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--orange);
+    }
+
+    .history-habits {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .history-habit {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .history-habit.done { color: var(--text); }
+
+    .history-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--border);
+      flex-shrink: 0;
+    }
+
+    .history-dot.done { background: var(--orange); }
+
+    /* ── Profile / Settings page ── */
+    .settings-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0 16px 16px;
+    }
+
+    .settings-card {
+      background: var(--card);
+      border-radius: 14px;
+      margin-bottom: 16px;
+      overflow: hidden;
+    }
+
+    .settings-card-title {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--muted);
+      letter-spacing: 1px;
+      padding: 12px 16px 4px;
+    }
+
+    .settings-row {
+      display: flex;
+      align-items: center;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      gap: 12px;
+    }
+
+    .settings-row:last-child { border-bottom: none; }
+
+    .settings-row label {
+      flex: 1;
+      font-size: 15px;
+      font-weight: 500;
+    }
+
+    .settings-row input[type="text"] {
+      flex: 1;
+      border: none;
+      background: transparent;
+      font-size: 15px;
+      text-align: right;
+      color: var(--muted);
+      outline: none;
+    }
+
+    /* ── Edit habits modal ── */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.4);
+      z-index: 100;
+      align-items: flex-end;
+    }
+
+    .modal-overlay.open { display: flex; }
+
+    .modal {
+      background: var(--bg);
+      border-radius: 20px 20px 0 0;
+      width: 100%;
+      max-width: 430px;
+      margin: 0 auto;
+      padding: 20px 16px 40px;
+      max-height: 80vh;
+      overflow-y: auto;
+    }
+
+    .modal-title {
+      font-size: 18px;
+      font-weight: 800;
+      margin-bottom: 16px;
+    }
+
+    .modal-habit-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: var(--card);
+      border-radius: 12px;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+    }
+
+    .modal-habit-row input {
+      flex: 1;
+      border: none;
+      background: transparent;
+      font-size: 15px;
+      outline: none;
+    }
+
+    .delete-btn {
+      background: none;
+      border: none;
+      color: #CC3300;
+      font-size: 20px;
+      cursor: pointer;
+      line-height: 1;
+      padding: 0 2px;
+    }
+
+    .modal-add-btn {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: transparent;
+      border: none;
+      color: var(--orange);
+      font-size: 15px;
+      font-weight: 600;
+      padding: 10px 4px;
+      cursor: pointer;
+    }
+
+    .modal-save-btn {
+      display: block;
+      width: 100%;
+      padding: 14px;
+      background: var(--orange);
+      color: white;
+      border: none;
+      border-radius: 12px;
+      font-size: 16px;
+      font-weight: 700;
+      margin-top: 16px;
+      cursor: pointer;
+    }
+
+    .streak-badge {
+      display: inline-block;
+      background: var(--orange);
+      color: white;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 99px;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+
+    .empty-state {
+      text-align: center;
+      color: var(--muted);
+      font-size: 14px;
+      padding: 40px 20px;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #1C1C1E;
+        --card: #2C2C2E;
+        --text: #F2F2F7;
+        --muted: #8E8E93;
+        --border: #3A3A3C;
+        --check-border: #E0DDD8;
+      }
+    }
+  </style>
+</head>
+<body>
+
+<!-- TODAY page -->
+<div class="page active" id="page-today">
+  <div class="header">
+    <div class="logo">H</div>
+    <div class="day-badge" id="day-badge">DAY 1/66</div>
+  </div>
+
+  <div class="date-card">
+    <div class="date-card-inner">
+      <div class="date-label" id="date-label">Saturday 18</div>
+      <div class="time-display" id="time-display">00:00</div>
+      <div class="stats-row">
+        <div class="stat-item">
+          <div class="stat-label">BEST</div>
+          <div class="stat-value" id="stat-best">0</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">FAILS</div>
+          <div class="stat-value" id="stat-fails">0</div>
+        </div>
+      </div>
+    </div>
+    <div class="progress-bar-wrap">
+      <div class="progress-bar-fill" id="progress-fill" style="width:0%"></div>
+    </div>
+    <div class="progress-label" id="progress-label">0 / 0</div>
+  </div>
+
+  <div class="habits-section" id="habits-list"></div>
+  <button class="manage-btn" id="manage-btn">+ 習慣を編集</button>
+</div>
+
+<!-- PROGRESS page -->
+<div class="page" id="page-progress">
+  <div class="page-title">進捗</div>
+  <div class="history-list" id="history-list"></div>
+</div>
+
+<!-- PROFILE page -->
+<div class="page" id="page-profile">
+  <div class="page-title">設定</div>
+  <div class="settings-list">
+    <div class="settings-card">
+      <div class="settings-card-title">チャレンジ日数</div>
+      <div class="settings-row">
+        <label>目標日数</label>
+        <input type="number" id="goal-days" value="66" min="1" max="365" style="width:60px;text-align:right;border:none;background:transparent;font-size:15px;color:var(--muted);outline:none;">
+        <span style="font-size:14px;color:var(--muted)">日</span>
+      </div>
+      <div class="settings-row">
+        <label>開始日</label>
+        <input type="date" id="start-date" style="border:none;background:transparent;font-size:15px;color:var(--muted);outline:none;">
+      </div>
+    </div>
+    <div class="settings-card">
+      <div class="settings-card-title">データ</div>
+      <div class="settings-row" style="cursor:pointer" id="reset-btn">
+        <label style="color:#CC3300;cursor:pointer">全データをリセット</label>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Bottom Navigation -->
+<nav class="bottom-nav">
+  <div class="nav-item active" data-page="today" onclick="switchPage('today')">
+    <div class="nav-icon">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/>
+      </svg>
+    </div>
+    TODAY
+  </div>
+  <div class="nav-item" data-page="progress" onclick="switchPage('progress')">
+    <div class="nav-icon">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>
+      </svg>
+    </div>
+    進捗
+  </div>
+  <div class="nav-item" data-page="profile" onclick="switchPage('profile')">
+    <div class="nav-icon">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
+      </svg>
+    </div>
+    設定
+  </div>
+</nav>
+
+<!-- Edit Habits Modal -->
+<div class="modal-overlay" id="modal-overlay" onclick="closeModal(event)">
+  <div class="modal" id="modal">
+    <div class="modal-title">習慣を編集</div>
+    <div id="modal-habits"></div>
+    <button class="modal-add-btn" onclick="addModalHabit()">＋ 新しい習慣を追加</button>
+    <button class="modal-save-btn" onclick="saveHabits()">保存</button>
+  </div>
+</div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────
+const STORAGE_KEY = 'habitTracker_v2';
+
+function loadState() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch(e) {}
+  return {
+    habits: ['45分ワークアウト', '10ページ読書', '砂糖なし'],
+    history: {},      // { 'YYYY-MM-DD': { habitName: bool, ... } }
+    startDate: todayStr(),
+    goalDays: 66,
+  };
+}
+
+function saveState() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
+
+function todayStr() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+let state = loadState();
+
+// ── Clock ──────────────────────────────────────────────────────────────────
+function updateClock() {
+  const now = new Date();
+  const h = String(now.getHours()).padStart(2, '0');
+  const m = String(now.getMinutes()).padStart(2, '0');
+  document.getElementById('time-display').textContent = `${h}:${m}`;
+
+  const days = ['日','月','火','水','木','金','土'];
+  const day = days[now.getDay()];
+  const date = now.getDate();
+  const month = now.getMonth() + 1;
+  document.getElementById('date-label').textContent = `${month}月${date}日（${day}）`;
+}
+
+setInterval(updateClock, 1000);
+updateClock();
+
+// ── Day Counter ────────────────────────────────────────────────────────────
+function getDayNumber() {
+  const start = new Date(state.startDate);
+  const today = new Date(todayStr());
+  const diff = Math.floor((today - start) / 86400000) + 1;
+  return Math.max(1, diff);
+}
+
+// ── Stats ──────────────────────────────────────────────────────────────────
+function calcStats() {
+  let best = 0, fails = 0, currentStreak = 0;
+  const dates = Object.keys(state.history).sort();
+
+  for (const d of dates) {
+    const checks = Object.values(state.history[d]);
+    if (checks.length === 0) continue;
+    const allDone = checks.every(Boolean);
+    const anyDone = checks.some(Boolean);
+    if (allDone) {
+      currentStreak++;
+      best = Math.max(best, currentStreak);
+    } else {
+      if (anyDone) fails++;
+      currentStreak = 0;
+    }
+  }
+  return { best, fails };
+}
+
+// ── Render TODAY ───────────────────────────────────────────────────────────
+function renderToday() {
+  const today = todayStr();
+  if (!state.history[today]) state.history[today] = {};
+
+  const { best, fails } = calcStats();
+  document.getElementById('stat-best').textContent = best;
+  document.getElementById('stat-fails').textContent = fails;
+  document.getElementById('day-badge').textContent =
+    `DAY ${getDayNumber()}/${state.goalDays}`;
+
+  const checks = state.history[today];
+  const total = state.habits.length;
+  const done = state.habits.filter(h => checks[h]).length;
+
+  document.getElementById('progress-fill').style.width =
+    total ? `${(done / total) * 100}%` : '0%';
+  document.getElementById('progress-label').textContent = `${done} / ${total}`;
+
+  const list = document.getElementById('habits-list');
+  list.innerHTML = '';
+  state.habits.forEach(habit => {
+    const checked = !!checks[habit];
+    const item = document.createElement('div');
+    item.className = 'habit-item';
+    item.innerHTML = `
+      <div class="habit-check ${checked ? 'checked' : ''}"></div>
+      <div class="habit-name ${checked ? 'done' : ''}">${escHtml(habit)}</div>
+    `;
+    item.addEventListener('click', () => toggleHabit(habit));
+    list.appendChild(item);
+  });
+
+  saveState();
+}
+
+function toggleHabit(habit) {
+  const today = todayStr();
+  if (!state.history[today]) state.history[today] = {};
+  state.history[today][habit] = !state.history[today][habit];
+  renderToday();
+}
+
+// ── Render PROGRESS ────────────────────────────────────────────────────────
+function renderProgress() {
+  const list = document.getElementById('history-list');
+  list.innerHTML = '';
+
+  const dates = Object.keys(state.history).sort().reverse();
+  if (dates.length === 0) {
+    list.innerHTML = '<div class="empty-state">まだ記録がありません。<br>今日の習慣を始めましょう！</div>';
+    return;
+  }
+
+  for (const d of dates) {
+    const checks = state.history[d];
+    const total = Object.keys(checks).length;
+    if (total === 0) continue;
+    const done = Object.values(checks).filter(Boolean).length;
+
+    const dateObj = new Date(d + 'T00:00:00');
+    const days = ['日','月','火','水','木','金','土'];
+    const label = `${dateObj.getMonth()+1}月${dateObj.getDate()}日（${days[dateObj.getDay()]}）`;
+
+    const card = document.createElement('div');
+    card.className = 'history-day';
+    const habitsHtml = Object.entries(checks).map(([name, ok]) => `
+      <div class="history-habit ${ok ? 'done' : ''}">
+        <div class="history-dot ${ok ? 'done' : ''}"></div>
+        ${escHtml(name)}
+      </div>
+    `).join('');
+
+    card.innerHTML = `
+      <div class="history-day-header">
+        <div class="history-date">${label}</div>
+        <div class="history-score">${done}/${total} 完了</div>
+      </div>
+      <div class="history-habits">${habitsHtml}</div>
+    `;
+    list.appendChild(card);
+  }
+}
+
+// ── Modal ──────────────────────────────────────────────────────────────────
+document.getElementById('manage-btn').addEventListener('click', openModal);
+
+function openModal() {
+  const container = document.getElementById('modal-habits');
+  container.innerHTML = '';
+  state.habits.forEach((h, i) => {
+    const row = document.createElement('div');
+    row.className = 'modal-habit-row';
+    row.innerHTML = `
+      <input type="text" value="${escHtml(h)}" placeholder="習慣名" data-idx="${i}">
+      <button class="delete-btn" onclick="deleteModalHabit(${i})">×</button>
+    `;
+    container.appendChild(row);
+  });
+  document.getElementById('modal-overlay').classList.add('open');
+}
+
+function closeModal(e) {
+  if (e.target === document.getElementById('modal-overlay')) {
+    document.getElementById('modal-overlay').classList.remove('open');
+  }
+}
+
+function addModalHabit() {
+  const container = document.getElementById('modal-habits');
+  const idx = container.children.length;
+  const row = document.createElement('div');
+  row.className = 'modal-habit-row';
+  row.innerHTML = `
+    <input type="text" value="" placeholder="習慣名" data-idx="${idx}">
+    <button class="delete-btn" onclick="deleteModalHabit(${idx})">×</button>
+  `;
+  container.appendChild(row);
+  row.querySelector('input').focus();
+}
+
+function deleteModalHabit(idx) {
+  const container = document.getElementById('modal-habits');
+  const rows = container.querySelectorAll('.modal-habit-row');
+  if (rows[idx]) rows[idx].remove();
+  // re-index
+  container.querySelectorAll('[data-idx]').forEach((el, i) => el.dataset.idx = i);
+}
+
+function saveHabits() {
+  const inputs = document.querySelectorAll('#modal-habits input');
+  const newHabits = Array.from(inputs)
+    .map(i => i.value.trim())
+    .filter(Boolean);
+  state.habits = newHabits;
+  document.getElementById('modal-overlay').classList.remove('open');
+  renderToday();
+  saveState();
+}
+
+// ── Settings ───────────────────────────────────────────────────────────────
+function initSettings() {
+  const goalInput = document.getElementById('goal-days');
+  const startInput = document.getElementById('start-date');
+  goalInput.value = state.goalDays;
+  startInput.value = state.startDate;
+
+  goalInput.addEventListener('change', () => {
+    state.goalDays = parseInt(goalInput.value) || 66;
+    saveState();
+    renderToday();
+  });
+  startInput.addEventListener('change', () => {
+    state.startDate = startInput.value || todayStr();
+    saveState();
+    renderToday();
+  });
+
+  document.getElementById('reset-btn').addEventListener('click', () => {
+    if (confirm('全データをリセットしますか？この操作は元に戻せません。')) {
+      localStorage.removeItem(STORAGE_KEY);
+      state = loadState();
+      initSettings();
+      renderToday();
+      renderProgress();
+    }
+  });
+}
+
+// ── Navigation ─────────────────────────────────────────────────────────────
+function switchPage(page) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById(`page-${page}`).classList.add('active');
+  document.querySelector(`[data-page="${page}"]`).classList.add('active');
+
+  if (page === 'progress') renderProgress();
+  if (page === 'today') renderToday();
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Init ───────────────────────────────────────────────────────────────────
+initSettings();
+renderToday();
+</script>
+</body>
+</html>
