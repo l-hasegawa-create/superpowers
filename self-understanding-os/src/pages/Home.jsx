@@ -1,8 +1,29 @@
 import { useEffect, useMemo, useState } from 'react';
-import { BatteryCharging, Check, Flame, Pencil, Smile } from 'lucide-react';
+import {
+  AlertTriangle,
+  ArrowRight,
+  BatteryCharging,
+  Check,
+  Flame,
+  Loader2,
+  Pencil,
+  Quote,
+  RefreshCw,
+  Smile,
+  Sparkles,
+} from 'lucide-react';
 
 const STORAGE_KEY = 'dailyState';
+const IDEAL_TYPE_KEY = 'idealType';
+const MORNING_KEY = 'morningMessage';
 const LEVELS = [1, 2, 3, 4, 5];
+
+const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
+const ANTHROPIC_MODEL = 'claude-sonnet-4-20250514';
+
+const PROMPT_TEMPLATE = `ユーザーの状態と理想像に基づき、短く具体的な朝のメッセージを生成してください。
+条件：100文字以内・行動に繋がる・抽象的すぎない・世界の著名人の名言を使うこと
+気分: {{mood}} 体調: {{energy}} やる気: {{motivation}} 理想像: {{ideal_type}}`;
 
 const METRICS = [
   { key: 'mood', label: 'MOOD', sub: '気分', icon: Smile },
@@ -25,6 +46,86 @@ function loadDailyState() {
   } catch {
     return null;
   }
+}
+
+function loadIdealType() {
+  try {
+    const raw = localStorage.getItem(IDEAL_TYPE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function loadMorningMessage() {
+  try {
+    const raw = localStorage.getItem(MORNING_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildPrompt(state, idealType) {
+  return PROMPT_TEMPLATE.replace('{{mood}}', String(state.mood))
+    .replace('{{energy}}', String(state.energy))
+    .replace('{{motivation}}', String(state.motivation))
+    .replace('{{ideal_type}}', idealType);
+}
+
+function parseMessage(text) {
+  if (!text) return { quote: '', action: '' };
+  const trimmed = text.trim();
+  const patterns = [/「([^」]+)」/, /『([^』]+)』/, /"([^"]+)"/, /"([^"]+)"/];
+  for (const re of patterns) {
+    const m = trimmed.match(re);
+    if (m) {
+      const quote = m[1].trim();
+      const action = trimmed
+        .replace(m[0], '')
+        .trim()
+        .replace(/^[、。\s—\-–:：]+/, '')
+        .replace(/[\s—\-–:：]+$/, '');
+      return { quote, action };
+    }
+  }
+  return { quote: '', action: trimmed };
+}
+
+async function callClaudeAPI(prompt) {
+  const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    throw new Error(
+      'APIキーが未設定です。.env に VITE_ANTHROPIC_API_KEY を設定してください。',
+    );
+  }
+  const res = await fetch(ANTHROPIC_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
+    body: JSON.stringify({
+      model: ANTHROPIC_MODEL,
+      max_tokens: 400,
+      messages: [{ role: 'user', content: prompt }],
+    }),
+  });
+  if (!res.ok) {
+    let detail = '';
+    try {
+      const err = await res.json();
+      detail = err?.error?.message || '';
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail || `API error ${res.status}`);
+  }
+  const data = await res.json();
+  const block = data.content?.find((b) => b.type === 'text');
+  return block?.text ?? '';
 }
 
 export default function Home() {
@@ -81,7 +182,261 @@ export default function Home() {
           onSave={handleSave}
         />
       )}
+
+      <MorningMessage saved={saved} />
     </section>
+  );
+}
+
+function MorningMessage({ saved }) {
+  const [status, setStatus] = useState('idle');
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+  const [idealType, setIdealType] = useState(null);
+
+  useEffect(() => {
+    setIdealType(loadIdealType());
+    const cached = loadMorningMessage();
+    if (cached && cached.date === todayISO()) {
+      setResult(cached);
+      setStatus('success');
+    }
+  }, []);
+
+  const stateReady = !!saved;
+  const idealReady = !!(idealType && idealType.typeLabel);
+  const canGenerate = stateReady && idealReady && status !== 'loading';
+
+  async function generate() {
+    if (!canGenerate) return;
+    setStatus('loading');
+    setError(null);
+    try {
+      const prompt = buildPrompt(saved, idealType.typeLabel);
+      const raw = await callClaudeAPI(prompt);
+      const parsed = parseMessage(raw);
+      const payload = {
+        date: todayISO(),
+        quote: parsed.quote,
+        action: parsed.action,
+        raw,
+      };
+      localStorage.setItem(MORNING_KEY, JSON.stringify(payload));
+      setResult(payload);
+      setStatus('success');
+    } catch (e) {
+      setError(e.message || String(e));
+      setStatus('error');
+    }
+  }
+
+  return (
+    <div
+      className="animate-fade-in mt-8"
+      style={{ animationDelay: '300ms' }}
+    >
+      <header className="flex items-baseline justify-between">
+        <div>
+          <p className="jarvis-subtitle text-[11px]">
+            // MORNING_BRIEFING · {todayISO()}
+          </p>
+          <h2 className="font-display text-xl tracking-[0.18em] text-jarvis-accent">
+            今日のメッセージ
+          </h2>
+        </div>
+        {status === 'success' && (
+          <button
+            type="button"
+            onClick={generate}
+            disabled={!canGenerate}
+            className="flex items-center gap-1 border border-jarvis-border bg-jarvis-panel/60 px-2.5 py-1 font-display text-[10px] uppercase tracking-[0.22em] text-jarvis-dim transition hover:border-jarvis-cyan/60 hover:text-jarvis-accent disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <RefreshCw size={11} strokeWidth={2} />
+            <span>再生成</span>
+          </button>
+        )}
+      </header>
+
+      {!stateReady || !idealReady ? (
+        <Prerequisite stateReady={stateReady} idealReady={idealReady} />
+      ) : status === 'idle' ? (
+        <GenerateButton onClick={generate} />
+      ) : status === 'loading' ? (
+        <LoadingPanel />
+      ) : status === 'error' ? (
+        <ErrorPanel error={error} onRetry={generate} />
+      ) : (
+        <ResultCard result={result} />
+      )}
+    </div>
+  );
+}
+
+function Prerequisite({ stateReady, idealReady }) {
+  return (
+    <div className="jarvis-panel mt-3 flex items-start gap-3 p-4">
+      <AlertTriangle
+        size={18}
+        strokeWidth={1.75}
+        className="mt-0.5 shrink-0 text-amber-300/80"
+      />
+      <div className="space-y-1 text-sm">
+        <p className="font-display text-[11px] tracking-[0.22em] text-amber-200/80">
+          DATA_INSUFFICIENT
+        </p>
+        <ul className="space-y-0.5 font-body text-jarvis-text/80">
+          {!stateReady && <li>・先に今日の状態を記録してください</li>}
+          {!idealReady && <li>・Settingsで理想像診断を完了してください</li>}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+function GenerateButton({ onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="group relative mt-3 flex w-full items-center justify-center gap-2 overflow-hidden border border-jarvis-cyan bg-jarvis-cyan/10 px-5 py-3 font-display text-sm font-semibold uppercase tracking-[0.28em] text-jarvis-accent shadow-glow transition hover:bg-jarvis-cyan/20"
+    >
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-y-0 left-0 w-1/3 -skew-x-12 bg-gradient-to-r from-transparent via-jarvis-cyan/30 to-transparent animate-sweep"
+      />
+      <Sparkles size={16} strokeWidth={2.25} className="animate-pulse-glow" />
+      <span>今日のメッセージを生成</span>
+    </button>
+  );
+}
+
+function LoadingPanel() {
+  const [phase, setPhase] = useState(0);
+  const phases = [
+    'ANALYZING DAILY STATE',
+    'CROSS-REFERENCING IDEAL TYPE',
+    'GENERATING MORNING BRIEFING',
+  ];
+  useEffect(() => {
+    const t = setInterval(() => setPhase((p) => (p + 1) % phases.length), 900);
+    return () => clearInterval(t);
+  }, []);
+
+  return (
+    <div className="jarvis-panel relative mt-3 overflow-hidden p-5">
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-y-0 left-0 w-1/3 -skew-x-12 bg-gradient-to-r from-transparent via-jarvis-cyan/25 to-transparent animate-sweep"
+      />
+      <div className="relative flex items-center gap-3">
+        <Loader2
+          size={22}
+          strokeWidth={2}
+          className="animate-spin text-jarvis-cyan drop-shadow-[0_0_6px_rgba(0,229,255,0.7)]"
+        />
+        <div className="min-w-0 flex-1">
+          <p className="font-display text-[11px] tracking-[0.22em] text-jarvis-cyan">
+            JARVIS // PROCESSING
+          </p>
+          <p
+            key={phase}
+            className="animate-fade-in mt-0.5 font-mono text-[12px] text-jarvis-accent"
+          >
+            {phases[phase]}
+            <span className="ml-1 inline-block w-2 animate-pulse-glow">_</span>
+          </p>
+        </div>
+      </div>
+      <div className="relative mt-4 space-y-2">
+        <div className="h-2 w-3/4 animate-pulse-glow bg-jarvis-cyan/15" />
+        <div className="h-2 w-1/2 animate-pulse-glow bg-jarvis-cyan/10" />
+        <div className="h-2 w-2/3 animate-pulse-glow bg-jarvis-cyan/15" />
+      </div>
+    </div>
+  );
+}
+
+function ErrorPanel({ error, onRetry }) {
+  return (
+    <div className="jarvis-panel mt-3 flex flex-col gap-3 border-red-400/40 p-4">
+      <div className="flex items-start gap-2">
+        <AlertTriangle
+          size={16}
+          strokeWidth={1.75}
+          className="mt-0.5 shrink-0 text-red-300"
+        />
+        <div className="min-w-0 flex-1">
+          <p className="font-display text-[11px] tracking-[0.22em] text-red-300">
+            GENERATION_FAILED
+          </p>
+          <p className="mt-1 break-words font-mono text-[12px] text-jarvis-text/80">
+            {error}
+          </p>
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="self-start border border-jarvis-border bg-jarvis-panel/60 px-3 py-1.5 font-display text-[11px] uppercase tracking-[0.22em] text-jarvis-dim transition hover:border-jarvis-cyan/60 hover:text-jarvis-accent"
+      >
+        再試行 · RETRY
+      </button>
+    </div>
+  );
+}
+
+function ResultCard({ result }) {
+  return (
+    <div
+      className="jarvis-panel animate-glow-in relative mt-3 overflow-hidden p-5"
+      style={{ animationDelay: '60ms' }}
+    >
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-y-0 left-0 w-1/3 -skew-x-12 bg-gradient-to-r from-transparent via-jarvis-cyan/15 to-transparent animate-sweep"
+      />
+
+      {result.quote ? (
+        <div
+          className="animate-fade-in relative"
+          style={{ animationDelay: '120ms' }}
+        >
+          <p className="flex items-center gap-2 font-display text-[10px] tracking-[0.28em] text-jarvis-cyan">
+            <Quote size={12} strokeWidth={2} />
+            <span>QUOTE · 名言</span>
+          </p>
+          <p
+            className="mt-2 font-display text-[18px] leading-relaxed text-jarvis-accent"
+            style={{ textShadow: '0 0 8px rgba(0, 229, 255, 0.45)' }}
+          >
+            「{result.quote}」
+          </p>
+        </div>
+      ) : null}
+
+      {result.quote && result.action ? (
+        <div className="jarvis-divider my-4" />
+      ) : null}
+
+      {result.action ? (
+        <div
+          className="animate-fade-in relative"
+          style={{ animationDelay: '220ms' }}
+        >
+          <p className="flex items-center gap-2 font-display text-[10px] tracking-[0.28em] text-jarvis-cyan">
+            <ArrowRight size={12} strokeWidth={2.25} />
+            <span>ACTION · 今日の一手</span>
+          </p>
+          <p className="mt-2 font-body text-base leading-relaxed text-jarvis-text">
+            {result.action}
+          </p>
+        </div>
+      ) : null}
+
+      {!result.quote && !result.action ? (
+        <p className="font-body text-sm text-jarvis-text">{result.raw}</p>
+      ) : null}
+    </div>
   );
 }
 
