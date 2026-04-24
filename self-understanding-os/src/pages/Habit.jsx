@@ -40,14 +40,20 @@ function calcStreak(habit, today) {
   return streak;
 }
 
+function nowHHMM() {
+  const d = new Date();
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
 function toggleHabitDone(habit, date) {
   const idx = habit.logs.findIndex((l) => l.date === date);
+  const time = nowHHMM();
   let logs;
   if (idx >= 0) {
     logs = [...habit.logs];
-    logs[idx] = { ...logs[idx], done: !logs[idx].done };
+    logs[idx] = { ...logs[idx], done: !logs[idx].done, time };
   } else {
-    logs = [...habit.logs, { date, done: true }];
+    logs = [...habit.logs, { date, done: true, time }];
   }
   return { ...habit, logs };
 }

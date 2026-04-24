@@ -126,4 +126,17 @@
       transparent 100%
     );
   }
+
+  .jarvis-chart .recharts-bar-rectangle path {
+    filter: drop-shadow(0 0 4px rgba(0, 229, 255, 0.45));
+  }
+
+  .jarvis-chart .recharts-cartesian-grid line {
+    stroke: rgba(19, 48, 77, 0.7);
+  }
+
+  .jarvis-chart .recharts-cartesian-axis-line,
+  .jarvis-chart .recharts-cartesian-axis-tick-line {
+    stroke: #13304d;
+  }
 }
