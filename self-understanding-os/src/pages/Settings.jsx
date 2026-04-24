@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
+  Check,
   Hammer,
+  Heart,
   Palette,
   RefreshCw,
   Rocket,
@@ -11,6 +13,7 @@ import {
 } from 'lucide-react';
 
 const STORAGE_KEY = 'idealType';
+const INTERESTS_KEY = 'interests';
 
 const TYPES = {
   entrepreneur: {
@@ -246,6 +249,8 @@ export default function Settings() {
         <div className="jarvis-divider mt-3" />
       </div>
 
+      <InterestsEditor />
+
       {phase === 'intro' && <Intro onStart={startQuiz} />}
       {phase === 'quiz' && (
         <Quiz
@@ -259,6 +264,77 @@ export default function Settings() {
         <Result result={result} onRestart={restart} />
       )}
     </section>
+  );
+}
+
+function InterestsEditor() {
+  const [saved, setSaved] = useState('');
+  const [draft, setDraft] = useState('');
+  const [justSaved, setJustSaved] = useState(false);
+
+  useEffect(() => {
+    try {
+      const v = localStorage.getItem(INTERESTS_KEY) || '';
+      setSaved(v);
+      setDraft(v);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const dirty = draft.trim() !== saved.trim();
+
+  function handleSave() {
+    if (!dirty) return;
+    const trimmed = draft.trim();
+    localStorage.setItem(INTERESTS_KEY, trimmed);
+    setSaved(trimmed);
+    setJustSaved(true);
+    setTimeout(() => setJustSaved(false), 1600);
+  }
+
+  return (
+    <div
+      className="jarvis-panel animate-fade-in mt-6 space-y-3 p-4"
+      style={{ animationDelay: '60ms' }}
+    >
+      <div className="flex items-baseline justify-between">
+        <p className="flex items-center gap-2 font-display text-[11px] tracking-[0.24em] text-jarvis-cyan">
+          <Heart size={13} strokeWidth={2} />
+          <span>興味 · INTERESTS</span>
+        </p>
+        <p className="jarvis-subtitle text-[10px]">// FOR_RECOMMENDATIONS</p>
+      </div>
+      <textarea
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        placeholder="例：テクノロジー、心理学、起業、サウナ"
+        rows={2}
+        maxLength={300}
+        className="w-full resize-y border border-jarvis-border bg-jarvis-bg/60 px-3 py-2 font-body text-jarvis-text placeholder:text-jarvis-dim/70 outline-none transition focus:border-jarvis-cyan focus:shadow-glow-soft"
+      />
+      <div className="flex items-center justify-between">
+        <p className="font-mono text-[10px] tracking-[0.16em] text-jarvis-dim">
+          Content画面のPodcast推薦などに利用されます
+        </p>
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={!dirty}
+          className={[
+            'flex items-center gap-1 border px-3 py-1.5 font-display text-[11px] uppercase tracking-[0.22em] transition',
+            dirty
+              ? 'border-jarvis-cyan bg-jarvis-cyan/10 text-jarvis-accent shadow-glow-soft hover:bg-jarvis-cyan/20'
+              : justSaved
+                ? 'border-jarvis-cyan/60 bg-jarvis-cyan/5 text-jarvis-accent'
+                : 'cursor-not-allowed border-jarvis-border bg-jarvis-panel/60 text-jarvis-dim',
+          ].join(' ')}
+        >
+          <Check size={12} strokeWidth={2.25} />
+          <span>{justSaved ? '保存済' : '保存'}</span>
+        </button>
+      </div>
+    </div>
   );
 }
 
