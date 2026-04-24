@@ -37,10 +37,20 @@ export default {
           '0%': { transform: 'translateX(-100%)' },
           '100%': { transform: 'translateX(100%)' },
         },
+        fadeIn: {
+          '0%': { opacity: '0', transform: 'translateY(8px)' },
+          '100%': { opacity: '1', transform: 'translateY(0)' },
+        },
+        glowIn: {
+          '0%': { opacity: '0', boxShadow: '0 0 0 rgba(0, 229, 255, 0)' },
+          '100%': { opacity: '1', boxShadow: '0 0 12px rgba(0, 229, 255, 0.45)' },
+        },
       },
       animation: {
         'pulse-glow': 'pulseGlow 2.4s ease-in-out infinite',
         sweep: 'sweep 3.5s linear infinite',
+        'fade-in': 'fadeIn 0.5s ease-out both',
+        'glow-in': 'glowIn 0.6s ease-out both',
       },
     },
   },
