@@ -6,17 +6,23 @@ import {
   Check,
   Flame,
   Loader2,
+  MessageSquare,
+  Moon,
   Pencil,
   Quote,
   RefreshCw,
   Smile,
   Sparkles,
+  Sunrise,
 } from 'lucide-react';
 
 const STORAGE_KEY = 'dailyState';
+const ARCHIVE_KEY = 'dailyStateArchive';
 const IDEAL_TYPE_KEY = 'idealType';
 const MORNING_KEY = 'morningMessage';
 const LEVELS = [1, 2, 3, 4, 5];
+const ARCHIVE_LIMIT = 14;
+const NIGHT_HOUR = 18;
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_MODEL = 'claude-sonnet-4-20250514';
@@ -39,13 +45,65 @@ function todayISO() {
   return `${y}-${m}-${day}`;
 }
 
+function shiftDay(iso, delta) {
+  const [y, m, d] = iso.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() + delta);
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+}
+
+function loadArchive() {
+  try {
+    const raw = localStorage.getItem(ARCHIVE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function archiveRecord(state) {
+  if (!state || !state.date) return;
+  const archive = loadArchive();
+  archive[state.date] = state;
+  const dates = Object.keys(archive).sort();
+  while (dates.length > ARCHIVE_LIMIT) {
+    delete archive[dates.shift()];
+  }
+  try {
+    localStorage.setItem(ARCHIVE_KEY, JSON.stringify(archive));
+  } catch {
+    /* ignore quota */
+  }
+}
+
 function loadDailyState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : null;
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (parsed && parsed.date && parsed.date !== todayISO()) {
+      archiveRecord(parsed);
+    }
+    return parsed;
   } catch {
     return null;
   }
+}
+
+function loadYesterdayState() {
+  const y = shiftDay(todayISO(), -1);
+  const archive = loadArchive();
+  if (archive[y]) return archive[y];
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (parsed && parsed.date === y) return parsed;
+  } catch {
+    /* ignore */
+  }
+  return null;
 }
 
 function loadIdealType() {
@@ -90,6 +148,20 @@ function parseMessage(text) {
     }
   }
   return { quote: '', action: trimmed };
+}
+
+function useIsEvening() {
+  const [evening, setEvening] = useState(
+    () => new Date().getHours() >= NIGHT_HOUR,
+  );
+  useEffect(() => {
+    const t = setInterval(
+      () => setEvening(new Date().getHours() >= NIGHT_HOUR),
+      60_000,
+    );
+    return () => clearInterval(t);
+  }, []);
+  return evening;
 }
 
 async function callClaudeAPI(prompt) {
@@ -164,6 +236,18 @@ export default function Home() {
     setSaved(null);
   }
 
+  function handleSaveNightReview({ review, nextAction }) {
+    if (!saved) return;
+    const merged = {
+      ...saved,
+      review: review.trim(),
+      nextAction: nextAction.trim(),
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
+    archiveRecord(merged);
+    setSaved(merged);
+  }
+
   return (
     <section className="mx-auto max-w-3xl">
       <div className="animate-fade-in">
@@ -171,6 +255,8 @@ export default function Home() {
         <h1 className="jarvis-title mt-1 text-3xl">HOME</h1>
         <div className="jarvis-divider mt-3" />
       </div>
+
+      <YesterdayMessage />
 
       {saved ? (
         <SummaryView state={saved} onEdit={handleEdit} />
@@ -184,6 +270,8 @@ export default function Home() {
       )}
 
       <MorningMessage saved={saved} />
+
+      <NightReview saved={saved} onSave={handleSaveNightReview} />
     </section>
   );
 }
@@ -665,6 +753,295 @@ function SummaryRow({ metric, value }) {
               />
             );
           })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function YesterdayMessage() {
+  const [yState, setYState] = useState(null);
+
+  useEffect(() => {
+    const y = loadYesterdayState();
+    if (y && y.nextAction && y.nextAction.trim()) {
+      setYState(y);
+    }
+  }, []);
+
+  if (!yState) return null;
+
+  return (
+    <div
+      className="jarvis-panel animate-glow-in relative mt-6 overflow-hidden p-4"
+      style={{ animationDelay: '40ms' }}
+    >
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-y-0 left-0 w-1/3 -skew-x-12 bg-gradient-to-r from-transparent via-jarvis-cyan/15 to-transparent animate-sweep"
+      />
+      <div className="relative flex items-start gap-3">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center border border-jarvis-cyan/70 text-jarvis-accent shadow-glow-soft">
+          <Sunrise size={16} strokeWidth={1.75} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="flex items-center gap-2 font-display text-[10px] tracking-[0.24em] text-jarvis-cyan">
+            <span>FROM_YESTERDAY</span>
+            <span className="font-mono text-[10px] tracking-[0.14em] text-jarvis-dim">
+              · {yState.date}
+            </span>
+          </p>
+          <p className="jarvis-subtitle text-[10px]">// 昨日の自分より</p>
+          <p
+            className="mt-1 font-body text-base leading-relaxed text-jarvis-accent"
+            style={{ textShadow: '0 0 6px rgba(0, 229, 255, 0.35)' }}
+          >
+            「{yState.nextAction}」
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NightReview({ saved, onSave }) {
+  const evening = useIsEvening();
+  const [editing, setEditing] = useState(false);
+
+  if (!evening) return null;
+
+  if (!saved) {
+    return (
+      <div
+        className="jarvis-panel animate-fade-in mt-8 flex items-start gap-3 p-4"
+        style={{ animationDelay: '380ms' }}
+      >
+        <Moon
+          size={18}
+          strokeWidth={1.75}
+          className="mt-0.5 shrink-0 text-jarvis-cyan"
+        />
+        <div className="min-w-0">
+          <p className="font-display text-[11px] tracking-[0.24em] text-jarvis-cyan">
+            NIGHT_REVIEW · 夜の振り返り
+          </p>
+          <p className="mt-1 font-body text-sm text-jarvis-text/80">
+            まずは今日の状態（気分・体調・やる気）を記録すると、振り返りも保存できます。
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  const hasReview =
+    (saved.review && saved.review.trim()) ||
+    (saved.nextAction && saved.nextAction.trim());
+
+  if (editing || !hasReview) {
+    return (
+      <NightReviewForm
+        initial={{
+          review: saved.review || '',
+          nextAction: saved.nextAction || '',
+        }}
+        onCancel={hasReview ? () => setEditing(false) : null}
+        onSave={(v) => {
+          onSave(v);
+          setEditing(false);
+        }}
+      />
+    );
+  }
+
+  return <NightReviewSummary saved={saved} onEdit={() => setEditing(true)} />;
+}
+
+function NightReviewForm({ initial, onSave, onCancel }) {
+  const [review, setReview] = useState(initial.review);
+  const [nextAction, setNextAction] = useState(initial.nextAction);
+
+  const ready = review.trim().length > 0 && nextAction.trim().length > 0;
+
+  function submit(e) {
+    e.preventDefault();
+    if (!ready) return;
+    onSave({ review, nextAction });
+  }
+
+  return (
+    <form
+      onSubmit={submit}
+      className="jarvis-panel animate-fade-in mt-8 space-y-3 p-5"
+      style={{ animationDelay: '380ms' }}
+    >
+      <header className="flex items-baseline justify-between">
+        <p className="flex items-center gap-2 font-display text-[11px] tracking-[0.24em] text-jarvis-cyan">
+          <Moon size={13} strokeWidth={2} />
+          <span>夜の振り返り</span>
+        </p>
+        <p className="jarvis-subtitle text-[10px]">// NIGHT_REVIEW</p>
+      </header>
+
+      <div>
+        <NightLabel ja="今日の一言" en="REVIEW" required icon={MessageSquare} />
+        <textarea
+          value={review}
+          onChange={(e) => setReview(e.target.value)}
+          placeholder="例：会議で発言できた / 朝の集中が続いた"
+          rows={3}
+          maxLength={300}
+          className="mt-1.5 w-full resize-y border border-jarvis-border bg-jarvis-bg/60 px-3 py-2 font-body text-jarvis-text placeholder:text-jarvis-dim/70 outline-none transition focus:border-jarvis-cyan focus:shadow-glow-soft"
+        />
+      </div>
+
+      <div>
+        <NightLabel
+          ja="明日の最小アクション"
+          en="NEXT_ACTION"
+          required
+          icon={Sunrise}
+        />
+        <input
+          type="text"
+          value={nextAction}
+          onChange={(e) => setNextAction(e.target.value)}
+          placeholder="例：朝7時に起きる / 1ページだけ読む"
+          maxLength={120}
+          className="mt-1.5 w-full border border-jarvis-border bg-jarvis-bg/60 px-3 py-2 font-body text-jarvis-text placeholder:text-jarvis-dim/70 outline-none transition focus:border-jarvis-cyan focus:shadow-glow-soft"
+        />
+      </div>
+
+      <div className="flex items-center gap-2 pt-1">
+        <button
+          type="submit"
+          disabled={!ready}
+          className={[
+            'group relative flex flex-1 items-center justify-center gap-2 overflow-hidden border px-5 py-3 font-display text-sm font-semibold uppercase tracking-[0.28em] transition',
+            ready
+              ? 'border-jarvis-cyan bg-jarvis-cyan/10 text-jarvis-accent shadow-glow hover:bg-jarvis-cyan/20'
+              : 'cursor-not-allowed border-jarvis-border bg-jarvis-panel/60 text-jarvis-dim',
+          ].join(' ')}
+        >
+          {ready && (
+            <span
+              aria-hidden
+              className="pointer-events-none absolute inset-y-0 left-0 w-1/3 -skew-x-12 bg-gradient-to-r from-transparent via-jarvis-cyan/30 to-transparent animate-sweep"
+            />
+          )}
+          <Check size={16} strokeWidth={2.25} />
+          <span>振り返りを保存</span>
+        </button>
+        {onCancel && (
+          <button
+            type="button"
+            onClick={onCancel}
+            className="border border-jarvis-border bg-jarvis-panel/60 px-3 py-2 font-display text-[11px] uppercase tracking-[0.22em] text-jarvis-dim transition hover:border-jarvis-cyan/60 hover:text-jarvis-accent"
+          >
+            キャンセル
+          </button>
+        )}
+      </div>
+    </form>
+  );
+}
+
+function NightLabel({ ja, en, required, icon: Icon }) {
+  return (
+    <span className="flex items-baseline gap-2">
+      {Icon && (
+        <Icon size={11} strokeWidth={2} className="text-jarvis-cyan" />
+      )}
+      <span className="font-display text-[11px] tracking-[0.22em] text-jarvis-accent">
+        {ja}
+        {required && <span className="ml-0.5 text-jarvis-cyan">*</span>}
+      </span>
+      <span className="font-mono text-[10px] tracking-[0.16em] text-jarvis-dim">
+        {en}
+      </span>
+    </span>
+  );
+}
+
+function NightReviewSummary({ saved, onEdit }) {
+  return (
+    <div
+      className="jarvis-panel animate-glow-in relative mt-8 overflow-hidden p-5"
+      style={{ animationDelay: '60ms' }}
+    >
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-y-0 left-0 w-1/3 -skew-x-12 bg-gradient-to-r from-transparent via-jarvis-cyan/20 to-transparent animate-sweep"
+      />
+      <div className="relative">
+        <header className="flex items-center gap-2">
+          <Sparkles
+            size={16}
+            strokeWidth={1.75}
+            className="animate-pulse-glow text-jarvis-cyan"
+          />
+          <p className="font-display text-[11px] tracking-[0.24em] text-jarvis-cyan">
+            EVENING_LOG_SAVED
+          </p>
+        </header>
+        <p
+          className="animate-fade-in mt-2 font-display text-2xl tracking-[0.16em] text-jarvis-accent"
+          style={{
+            textShadow: '0 0 10px rgba(0, 229, 255, 0.55)',
+            animationDelay: '120ms',
+          }}
+        >
+          今日もお疲れ様でした
+        </p>
+        <p
+          className="animate-fade-in jarvis-subtitle mt-1 text-[10px]"
+          style={{ animationDelay: '180ms' }}
+        >
+          // GOOD_NIGHT · {saved.date}
+        </p>
+
+        <div className="jarvis-divider my-4" />
+
+        <div
+          className="animate-fade-in"
+          style={{ animationDelay: '260ms' }}
+        >
+          <p className="flex items-center gap-2 font-display text-[10px] tracking-[0.22em] text-jarvis-cyan">
+            <MessageSquare size={11} strokeWidth={2} />
+            <span>今日の一言 · REVIEW</span>
+          </p>
+          <p className="mt-1.5 whitespace-pre-wrap font-body text-base leading-relaxed text-jarvis-text">
+            {saved.review}
+          </p>
+        </div>
+
+        <div
+          className="animate-fade-in mt-4 border-l-2 border-jarvis-cyan/60 pl-3"
+          style={{ animationDelay: '340ms' }}
+        >
+          <p className="flex items-center gap-2 font-display text-[10px] tracking-[0.22em] text-jarvis-cyan">
+            <Sunrise size={11} strokeWidth={2} />
+            <span>明日の最小アクション · NEXT</span>
+          </p>
+          <p
+            className="mt-1.5 font-body text-base leading-relaxed text-jarvis-accent"
+            style={{ textShadow: '0 0 6px rgba(0, 229, 255, 0.4)' }}
+          >
+            {saved.nextAction}
+          </p>
+        </div>
+
+        <div
+          className="animate-fade-in mt-5 flex items-center gap-2"
+          style={{ animationDelay: '420ms' }}
+        >
+          <button
+            type="button"
+            onClick={onEdit}
+            className="flex items-center gap-1.5 border border-jarvis-border bg-jarvis-panel/60 px-3 py-1.5 font-display text-[11px] uppercase tracking-[0.24em] text-jarvis-dim transition hover:border-jarvis-cyan/60 hover:text-jarvis-accent"
+          >
+            <Pencil size={11} strokeWidth={2} />
+            <span>修正</span>
+          </button>
         </div>
       </div>
     </div>
