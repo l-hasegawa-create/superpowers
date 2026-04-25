@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  Activity,
   AlertTriangle,
   ArrowRight,
   BatteryCharging,
@@ -14,12 +15,14 @@ import {
   Smile,
   Sparkles,
   Sunrise,
+  Target,
 } from 'lucide-react';
 
 const STORAGE_KEY = 'dailyState';
 const ARCHIVE_KEY = 'dailyStateArchive';
 const IDEAL_TYPE_KEY = 'idealType';
 const MORNING_KEY = 'morningMessage';
+const HABITS_KEY = 'habits';
 const LEVELS = [1, 2, 3, 4, 5];
 const ARCHIVE_LIMIT = 14;
 const NIGHT_HOUR = 18;
@@ -119,6 +122,26 @@ function loadMorningMessage() {
   try {
     const raw = localStorage.getItem(MORNING_KEY);
     return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function loadHabitsToday() {
+  try {
+    const raw = localStorage.getItem(HABITS_KEY);
+    const habits = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(habits)) return null;
+    const today = todayISO();
+    const total = habits.length;
+    const completed = habits.filter((h) =>
+      h.logs?.some((l) => l.date === today && l.done),
+    ).length;
+    return {
+      total,
+      completed,
+      rate: total > 0 ? Math.round((completed / total) * 100) : 0,
+    };
   } catch {
     return null;
   }
@@ -257,6 +280,8 @@ export default function Home() {
       </div>
 
       <YesterdayMessage />
+
+      <StatusBoard />
 
       {saved ? (
         <SummaryView state={saved} onEdit={handleEdit} />
@@ -1044,6 +1069,126 @@ function NightReviewSummary({ saved, onEdit }) {
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function StatusBoard() {
+  const [data, setData] = useState({ ideal: null, habit: null });
+
+  useEffect(() => {
+    function refresh() {
+      setData({ ideal: loadIdealType(), habit: loadHabitsToday() });
+    }
+    refresh();
+    window.addEventListener('focus', refresh);
+    window.addEventListener('storage', refresh);
+    return () => {
+      window.removeEventListener('focus', refresh);
+      window.removeEventListener('storage', refresh);
+    };
+  }, []);
+
+  return (
+    <div
+      className="animate-fade-in mt-4 grid grid-cols-2 gap-2"
+      style={{ animationDelay: '60ms' }}
+    >
+      <IdealTile ideal={data.ideal} />
+      <HabitTile habit={data.habit} />
+    </div>
+  );
+}
+
+function IdealTile({ ideal }) {
+  return (
+    <div className="jarvis-panel relative overflow-hidden p-3 sm:p-4">
+      <div className="flex items-center gap-1.5">
+        <Target
+          size={12}
+          strokeWidth={2}
+          className={ideal ? 'text-jarvis-cyan' : 'text-jarvis-dim'}
+        />
+        <span className="font-display text-[10px] tracking-[0.22em] text-jarvis-cyan">
+          IDEAL
+        </span>
+      </div>
+      <p className="jarvis-subtitle text-[10px]">// 理想像</p>
+      {ideal ? (
+        <>
+          <p
+            className="mt-1.5 truncate font-display text-base tracking-[0.14em] text-jarvis-accent sm:text-lg"
+            style={{ textShadow: '0 0 6px rgba(0, 229, 255, 0.45)' }}
+            title={ideal.typeLabel}
+          >
+            {ideal.typeLabel}
+          </p>
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[10px] tabular-nums">
+            <span className="text-jarvis-cyan">
+              MATCH {ideal.matchScore ?? 0}%
+            </span>
+            <span className="text-jarvis-dim/70">·</span>
+            <span className="text-jarvis-dim">GAP {ideal.gapScore ?? 0}%</span>
+          </div>
+        </>
+      ) : (
+        <p className="mt-2 font-mono text-[11px] text-jarvis-dim">
+          Settingsで診断
+        </p>
+      )}
+    </div>
+  );
+}
+
+function HabitTile({ habit }) {
+  const [shown, setShown] = useState(0);
+  const target = habit?.rate ?? 0;
+  useEffect(() => {
+    const t = setTimeout(() => setShown(target), 120);
+    return () => clearTimeout(t);
+  }, [target]);
+
+  return (
+    <div className="jarvis-panel relative overflow-hidden p-3 sm:p-4">
+      <div className="flex items-center gap-1.5">
+        <Activity
+          size={12}
+          strokeWidth={2}
+          className={habit && habit.total > 0 ? 'text-jarvis-cyan' : 'text-jarvis-dim'}
+        />
+        <span className="font-display text-[10px] tracking-[0.22em] text-jarvis-cyan">
+          HABIT
+        </span>
+      </div>
+      <p className="jarvis-subtitle text-[10px]">// 今日の達成率</p>
+      {habit && habit.total > 0 ? (
+        <>
+          <div className="mt-1.5 flex items-baseline gap-1.5">
+            <p
+              className="font-display text-base font-bold tabular-nums text-jarvis-accent sm:text-lg"
+              style={{ textShadow: '0 0 6px rgba(0, 229, 255, 0.45)' }}
+            >
+              {habit.rate}
+              <span className="ml-0.5 font-body text-xs text-jarvis-dim">
+                %
+              </span>
+            </p>
+            <p className="font-mono text-[10px] text-jarvis-dim">
+              {habit.completed} / {habit.total}
+            </p>
+          </div>
+          <div className="mt-1.5 h-1 overflow-hidden bg-jarvis-border/60">
+            <div
+              className="h-full bg-jarvis-cyan shadow-[0_0_6px_rgba(0,229,255,0.55)] transition-[width] duration-700 ease-out"
+              style={{ width: `${shown}%` }}
+            />
+          </div>
+        </>
+      ) : (
+        <p className="mt-2 font-mono text-[11px] text-jarvis-dim">
+          Habitで習慣を追加
+        </p>
+      )}
     </div>
   );
 }

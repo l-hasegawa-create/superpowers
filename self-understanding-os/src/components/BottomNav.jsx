@@ -42,7 +42,7 @@ export default function BottomNav() {
               {({ isActive }) => (
                 <>
                   <Icon
-                    size={20}
+                    size={18}
                     strokeWidth={1.75}
                     className={
                       isActive
@@ -50,13 +50,13 @@ export default function BottomNav() {
                         : 'transition-[filter] group-hover:drop-shadow-[0_0_4px_rgba(0,229,255,0.5)]'
                     }
                   />
-                  <span className="font-display text-[10px] font-semibold tracking-[0.18em]">
+                  <span className="font-display text-[9px] font-semibold tracking-[0.08em] sm:text-[10px] sm:tracking-[0.18em]">
                     {label}
                   </span>
                   <span
                     aria-hidden
                     className={[
-                      'h-0.5 w-6 rounded-full transition-all',
+                      'h-0.5 w-5 rounded-full transition-all sm:w-6',
                       isActive
                         ? 'bg-jarvis-cyan shadow-glow'
                         : 'bg-transparent',
