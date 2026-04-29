@@ -114,11 +114,10 @@ export default function Thought() {
 
   return (
     <section className="mx-auto max-w-3xl">
-      <div className="animate-fade-in">
-        <p className="jarvis-subtitle text-xs">// MODULE_04</p>
-        <h1 className="jarvis-title mt-1 text-3xl">THOUGHT</h1>
-        <div className="jarvis-divider mt-3" />
-      </div>
+      <header className="animate-fade-in pt-2">
+        <p className="app-eyebrow">考えを置いておく場所</p>
+        <h1 className="app-title mt-0.5 text-2xl">思考のログ</h1>
+      </header>
 
       <Tabs current={tab} onChange={setTab} ruleCount={ruleCount} />
       <AddForm onAdd={add} initialType={tab === 'rules' ? 'rule' : 'decision'} />

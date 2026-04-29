@@ -243,11 +243,10 @@ export default function Settings() {
 
   return (
     <section className="mx-auto max-w-3xl">
-      <div className="animate-fade-in">
-        <p className="jarvis-subtitle text-xs">// MODULE_06</p>
-        <h1 className="jarvis-title mt-1 text-3xl">SETTINGS</h1>
-        <div className="jarvis-divider mt-3" />
-      </div>
+      <header className="animate-fade-in pt-2">
+        <p className="app-eyebrow">あなたの設計図</p>
+        <h1 className="app-title mt-0.5 text-2xl">設定</h1>
+      </header>
 
       <InterestsEditor />
 

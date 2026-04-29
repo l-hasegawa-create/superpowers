@@ -208,11 +208,10 @@ export default function Analysis() {
 
   return (
     <section className="mx-auto max-w-3xl">
-      <div className="animate-fade-in">
-        <p className="jarvis-subtitle text-xs">// MODULE_03</p>
-        <h1 className="jarvis-title mt-1 text-3xl">ANALYSIS</h1>
-        <div className="jarvis-divider mt-3" />
-      </div>
+      <header className="animate-fade-in pt-2">
+        <p className="app-eyebrow">習慣の傾向</p>
+        <h1 className="app-title mt-0.5 text-2xl">分析</h1>
+      </header>
 
       {!stats.hasHabits ? (
         <EmptyState

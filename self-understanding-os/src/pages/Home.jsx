@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   Activity,
-  AlertTriangle,
   ArrowRight,
   BatteryCharging,
   Check,
-  Flame,
+  ChevronDown,
+  ChevronRight,
+  Headphones,
   Loader2,
   MessageSquare,
   Moon,
@@ -17,35 +18,24 @@ import {
   Sunrise,
   Target,
 } from 'lucide-react';
+import { calcStateScore, scoreLabel } from '../lib/scoring.js';
+import {
+  generateMorningMessage,
+  loadCachedMorningMessage,
+} from '../lib/morningMessage.js';
 
 const STORAGE_KEY = 'dailyState';
 const ARCHIVE_KEY = 'dailyStateArchive';
 const IDEAL_TYPE_KEY = 'idealType';
-const MORNING_KEY = 'morningMessage';
 const HABITS_KEY = 'habits';
-const LEVELS = [1, 2, 3, 4, 5];
-const ARCHIVE_LIMIT = 14;
+const PODCAST_KEY = 'podcastRecommendations';
 const NIGHT_HOUR = 18;
-
-const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
-const ANTHROPIC_MODEL = 'claude-sonnet-4-20250514';
-
-const PROMPT_TEMPLATE = `ユーザーの状態と理想像に基づき、短く具体的な朝のメッセージを生成してください。
-条件：100文字以内・行動に繋がる・抽象的すぎない・世界の著名人の名言を使うこと
-気分: {{mood}} 体調: {{energy}} やる気: {{motivation}} 理想像: {{ideal_type}}`;
-
-const METRICS = [
-  { key: 'mood', label: 'MOOD', sub: '気分', icon: Smile },
-  { key: 'energy', label: 'ENERGY', sub: '体調', icon: BatteryCharging },
-  { key: 'motivation', label: 'MOTIVATION', sub: 'やる気', icon: Flame },
-];
+const ARCHIVE_LIMIT = 14;
+const LEVELS = [1, 2, 3, 4, 5];
 
 function todayISO() {
   const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 function shiftDay(iso, delta) {
@@ -55,16 +45,18 @@ function shiftDay(iso, delta) {
   return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
 }
 
-function loadArchive() {
+function loadJSON(key) {
   try {
-    const raw = localStorage.getItem(ARCHIVE_KEY);
-    const parsed = raw ? JSON.parse(raw) : {};
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? parsed
-      : {};
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : null;
   } catch {
-    return {};
+    return null;
   }
+}
+
+function loadArchive() {
+  const v = loadJSON(ARCHIVE_KEY);
+  return v && typeof v === 'object' && !Array.isArray(v) ? v : {};
 }
 
 function archiveRecord(state) {
@@ -72,105 +64,44 @@ function archiveRecord(state) {
   const archive = loadArchive();
   archive[state.date] = state;
   const dates = Object.keys(archive).sort();
-  while (dates.length > ARCHIVE_LIMIT) {
-    delete archive[dates.shift()];
-  }
+  while (dates.length > ARCHIVE_LIMIT) delete archive[dates.shift()];
   try {
     localStorage.setItem(ARCHIVE_KEY, JSON.stringify(archive));
   } catch {
-    /* ignore quota */
+    /* ignore */
   }
 }
 
 function loadDailyState() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    const parsed = raw ? JSON.parse(raw) : null;
-    if (parsed && parsed.date && parsed.date !== todayISO()) {
-      archiveRecord(parsed);
-    }
-    return parsed;
-  } catch {
-    return null;
+  const parsed = loadJSON(STORAGE_KEY);
+  if (parsed && parsed.date && parsed.date !== todayISO()) {
+    archiveRecord(parsed);
   }
+  return parsed;
 }
 
 function loadYesterdayState() {
   const y = shiftDay(todayISO(), -1);
   const archive = loadArchive();
   if (archive[y]) return archive[y];
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    const parsed = raw ? JSON.parse(raw) : null;
-    if (parsed && parsed.date === y) return parsed;
-  } catch {
-    /* ignore */
-  }
+  const parsed = loadJSON(STORAGE_KEY);
+  if (parsed && parsed.date === y) return parsed;
   return null;
 }
 
-function loadIdealType() {
-  try {
-    const raw = localStorage.getItem(IDEAL_TYPE_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
-}
-
-function loadMorningMessage() {
-  try {
-    const raw = localStorage.getItem(MORNING_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
-}
-
 function loadHabitsToday() {
-  try {
-    const raw = localStorage.getItem(HABITS_KEY);
-    const habits = raw ? JSON.parse(raw) : [];
-    if (!Array.isArray(habits)) return null;
-    const today = todayISO();
-    const total = habits.length;
-    const completed = habits.filter((h) =>
-      h.logs?.some((l) => l.date === today && l.done),
-    ).length;
-    return {
-      total,
-      completed,
-      rate: total > 0 ? Math.round((completed / total) * 100) : 0,
-    };
-  } catch {
-    return null;
-  }
-}
-
-function buildPrompt(state, idealType) {
-  return PROMPT_TEMPLATE.replace('{{mood}}', String(state.mood))
-    .replace('{{energy}}', String(state.energy))
-    .replace('{{motivation}}', String(state.motivation))
-    .replace('{{ideal_type}}', idealType);
-}
-
-function parseMessage(text) {
-  if (!text) return { quote: '', action: '' };
-  const trimmed = text.trim();
-  const patterns = [/「([^」]+)」/, /『([^』]+)』/, /"([^"]+)"/, /"([^"]+)"/];
-  for (const re of patterns) {
-    const m = trimmed.match(re);
-    if (m) {
-      const quote = m[1].trim();
-      const action = trimmed
-        .replace(m[0], '')
-        .trim()
-        .replace(/^[、。\s—\-–:：]+/, '')
-        .replace(/[\s—\-–:：]+$/, '');
-      return { quote, action };
-    }
-  }
-  return { quote: '', action: trimmed };
+  const habits = loadJSON(HABITS_KEY);
+  if (!Array.isArray(habits)) return null;
+  const today = todayISO();
+  const total = habits.length;
+  const completed = habits.filter((h) =>
+    h.logs?.some((l) => l.date === today && l.done),
+  ).length;
+  return {
+    total,
+    completed,
+    rate: total > 0 ? Math.round((completed / total) * 100) : 0,
+  };
 }
 
 function useIsEvening() {
@@ -187,643 +118,582 @@ function useIsEvening() {
   return evening;
 }
 
-async function callClaudeAPI(prompt) {
-  const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    throw new Error(
-      'APIキーが未設定です。.env に VITE_ANTHROPIC_API_KEY を設定してください。',
-    );
-  }
-  const res = await fetch(ANTHROPIC_API_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
-    },
-    body: JSON.stringify({
-      model: ANTHROPIC_MODEL,
-      max_tokens: 400,
-      messages: [{ role: 'user', content: prompt }],
-    }),
-  });
-  if (!res.ok) {
-    let detail = '';
-    try {
-      const err = await res.json();
-      detail = err?.error?.message || '';
-    } catch {
-      /* ignore */
-    }
-    throw new Error(detail || `API error ${res.status}`);
-  }
-  const data = await res.json();
-  const block = data.content?.find((b) => b.type === 'text');
-  return block?.text ?? '';
-}
-
 export default function Home() {
-  const [values, setValues] = useState({ mood: 0, energy: 0, motivation: 0 });
-  const [saved, setSaved] = useState(null);
+  const [state, setState] = useState(null);
+  const [ideal, setIdeal] = useState(null);
+  const [message, setMessage] = useState(null);
+  const [habit, setHabit] = useState(null);
+  const [yesterday, setYesterday] = useState(null);
+  const [podcast, setPodcast] = useState(null);
+  const [tick, setTick] = useState(0);
+
+  function refresh() {
+    const today = todayISO();
+    const stored = loadDailyState();
+    setState(stored && stored.date === today ? stored : null);
+    setIdeal(loadJSON(IDEAL_TYPE_KEY));
+    const msg = loadCachedMorningMessage();
+    setMessage(msg && msg.date === today ? msg : null);
+    setHabit(loadHabitsToday());
+    setYesterday(loadYesterdayState());
+    const pc = loadJSON(PODCAST_KEY);
+    setPodcast(pc && pc.date === today ? pc : pc);
+  }
 
   useEffect(() => {
-    const existing = loadDailyState();
-    if (existing && existing.date === todayISO()) {
-      setSaved(existing);
-      setValues({
-        mood: existing.mood,
-        energy: existing.energy,
-        motivation: existing.motivation,
-      });
-    }
+    refresh();
+    const onFocus = () => setTick((t) => t + 1);
+    const onStorage = () => setTick((t) => t + 1);
+    window.addEventListener('focus', onFocus);
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('storage', onStorage);
+    };
   }, []);
 
-  const ready = useMemo(
-    () => METRICS.every(({ key }) => values[key] >= 1),
-    [values],
-  );
+  useEffect(() => {
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tick]);
 
-  function setLevel(key, n) {
-    setValues((v) => ({ ...v, [key]: n }));
+  function saveState(values) {
+    const today = todayISO();
+    const next = {
+      ...(state || {}),
+      date: today,
+      mood: values.mood,
+      energy: values.energy,
+      motivation: values.motivation,
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    archiveRecord(next);
+    setState(next);
   }
 
-  function handleSave() {
-    if (!ready) return;
-    const payload = { date: todayISO(), ...values };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-    setSaved(payload);
-  }
-
-  function handleEdit() {
-    setSaved(null);
-  }
-
-  function handleSaveNightReview({ review, nextAction }) {
-    if (!saved) return;
+  function saveNightReview({ review, nextAction }) {
+    if (!state) return;
     const merged = {
-      ...saved,
+      ...state,
       review: review.trim(),
       nextAction: nextAction.trim(),
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
     archiveRecord(merged);
-    setSaved(merged);
+    setState(merged);
   }
 
   return (
-    <section className="mx-auto max-w-3xl">
-      <div className="animate-fade-in">
-        <p className="jarvis-subtitle text-xs">// MODULE_01</p>
-        <h1 className="jarvis-title mt-1 text-3xl">HOME</h1>
-        <div className="jarvis-divider mt-3" />
+    <section className="mx-auto max-w-3xl space-y-4">
+      <Header state={state} />
+      <YesterdayCard yesterday={yesterday} />
+      <MessageCard message={message} ideal={ideal} onUpdated={setMessage} />
+      <PodcastCard podcast={podcast} />
+      <div className="grid grid-cols-2 gap-3">
+        <IdealTile ideal={ideal} />
+        <HabitTile habit={habit} />
       </div>
-
-      <YesterdayMessage />
-
-      <StatusBoard />
-
-      {saved ? (
-        <SummaryView state={saved} onEdit={handleEdit} />
-      ) : (
-        <InputView
-          values={values}
-          ready={ready}
-          onChange={setLevel}
-          onSave={handleSave}
-        />
-      )}
-
-      <MorningMessage saved={saved} />
-
-      <NightReview saved={saved} onSave={handleSaveNightReview} />
+      <StateTile state={state} onSave={saveState} />
+      <NightReview saved={state} onSave={saveNightReview} />
     </section>
   );
 }
 
-function MorningMessage({ saved }) {
-  const [status, setStatus] = useState('idle');
-  const [result, setResult] = useState(null);
+function Header({ state }) {
+  const score = calcStateScore(state || {});
+  const greet = (() => {
+    const h = new Date().getHours();
+    if (h < 5) return 'おやすみなさい';
+    if (h < 11) return 'おはようございます';
+    if (h < 17) return 'こんにちは';
+    if (h < 22) return 'お疲れさまです';
+    return 'こんばんは';
+  })();
+  return (
+    <header className="animate-fade-in pt-2">
+      <p className="app-eyebrow">{greet}</p>
+      <h1 className="app-title mt-0.5 text-2xl">
+        {score != null ? (
+          <>
+            今日のあなたは <span className="text-app-amber">{score}</span>
+            <span className="text-app-dim">/100</span>
+          </>
+        ) : (
+          '今日も一歩ずつ'
+        )}
+      </h1>
+    </header>
+  );
+}
+
+function YesterdayCard({ yesterday }) {
+  if (!yesterday || !yesterday.nextAction) return null;
+  return (
+    <div
+      className="app-card animate-fade-in flex items-start gap-3 p-4"
+      style={{ animationDelay: '40ms' }}
+    >
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-app-fog/10 text-app-fog">
+        <Sunrise size={16} strokeWidth={1.75} />
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="app-eyebrow">昨日の自分から</p>
+        <p className="mt-0.5 text-base leading-relaxed text-app-text">
+          「{yesterday.nextAction}」
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function MessageCard({ message, ideal, onUpdated }) {
+  const [generating, setGenerating] = useState(false);
   const [error, setError] = useState(null);
-  const [idealType, setIdealType] = useState(null);
 
-  useEffect(() => {
-    setIdealType(loadIdealType());
-    const cached = loadMorningMessage();
-    if (cached && cached.date === todayISO()) {
-      setResult(cached);
-      setStatus('success');
-    }
-  }, []);
-
-  const stateReady = !!saved;
-  const idealReady = !!(idealType && idealType.typeLabel);
-  const canGenerate = stateReady && idealReady && status !== 'loading';
-
-  async function generate() {
-    if (!canGenerate) return;
-    setStatus('loading');
+  async function handleGenerate() {
+    if (!ideal) return;
+    setGenerating(true);
     setError(null);
     try {
-      const prompt = buildPrompt(saved, idealType.typeLabel);
-      const raw = await callClaudeAPI(prompt);
-      const parsed = parseMessage(raw);
-      const payload = {
-        date: todayISO(),
-        quote: parsed.quote,
-        action: parsed.action,
-        raw,
-      };
-      localStorage.setItem(MORNING_KEY, JSON.stringify(payload));
-      setResult(payload);
-      setStatus('success');
+      const generated = await generateMorningMessage(ideal);
+      onUpdated?.(generated);
     } catch (e) {
       setError(e.message || String(e));
-      setStatus('error');
+    } finally {
+      setGenerating(false);
     }
+  }
+
+  if (!ideal) {
+    return (
+      <div
+        className="app-card animate-fade-in p-5"
+        style={{ animationDelay: '80ms' }}
+      >
+        <div className="flex items-center gap-2">
+          <Quote size={14} className="text-app-amber/70" />
+          <p className="app-eyebrow">今日のメッセージ</p>
+        </div>
+        <p className="mt-3 text-sm text-app-text-soft">
+          理想像を診断するとあなた向けの言葉が届きます。
+        </p>
+        <a
+          href="/settings"
+          className="mt-3 inline-flex items-center gap-1 text-sm text-app-amber hover:text-app-amber-soft"
+        >
+          Settingsで診断する
+          <ChevronRight size={14} />
+        </a>
+      </div>
+    );
+  }
+
+  if (!message) {
+    return (
+      <div
+        className="app-card animate-fade-in p-5"
+        style={{ animationDelay: '80ms' }}
+      >
+        <div className="flex items-center gap-2">
+          <Quote size={14} className="text-app-amber/70" />
+          <p className="app-eyebrow">今日のメッセージ</p>
+        </div>
+        <p className="mt-2 text-sm text-app-text-soft">
+          {error
+            ? '生成に失敗しました'
+            : 'まだ今日のメッセージが届いていません。'}
+        </p>
+        <button
+          type="button"
+          onClick={handleGenerate}
+          disabled={generating}
+          className="app-btn-primary mt-4"
+        >
+          {generating ? (
+            <Loader2 size={14} className="animate-spin" />
+          ) : (
+            <Sparkles size={14} />
+          )}
+          <span>{generating ? '生成中...' : 'メッセージを生成'}</span>
+        </button>
+        {error && (
+          <p className="mt-2 break-words text-[11px] text-app-rose">{error}</p>
+        )}
+      </div>
+    );
   }
 
   return (
     <div
-      className="animate-fade-in mt-8"
-      style={{ animationDelay: '300ms' }}
+      className="app-card animate-fade-in p-5"
+      style={{ animationDelay: '80ms' }}
     >
-      <header className="flex items-baseline justify-between">
-        <div>
-          <p className="jarvis-subtitle text-[11px]">
-            // MORNING_BRIEFING · {todayISO()}
-          </p>
-          <h2 className="font-display text-xl tracking-[0.18em] text-jarvis-accent">
-            今日のメッセージ
-          </h2>
+      <header className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Quote size={14} className="text-app-amber/70" />
+          <p className="app-eyebrow">今日のメッセージ</p>
         </div>
-        {status === 'success' && (
-          <button
-            type="button"
-            onClick={generate}
-            disabled={!canGenerate}
-            className="flex items-center gap-1 border border-jarvis-border bg-jarvis-panel/60 px-2.5 py-1 font-display text-[10px] uppercase tracking-[0.22em] text-jarvis-dim transition hover:border-jarvis-cyan/60 hover:text-jarvis-accent disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <RefreshCw size={11} strokeWidth={2} />
-            <span>再生成</span>
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={handleGenerate}
+          disabled={generating}
+          aria-label="再生成"
+          className="rounded-full p-1.5 text-app-dim transition hover:bg-app-border/40 hover:text-app-amber"
+        >
+          {generating ? (
+            <Loader2 size={14} className="animate-spin" />
+          ) : (
+            <RefreshCw size={14} />
+          )}
+        </button>
       </header>
 
-      {!stateReady || !idealReady ? (
-        <Prerequisite stateReady={stateReady} idealReady={idealReady} />
-      ) : status === 'idle' ? (
-        <GenerateButton onClick={generate} />
-      ) : status === 'loading' ? (
-        <LoadingPanel />
-      ) : status === 'error' ? (
-        <ErrorPanel error={error} onRetry={generate} />
-      ) : (
-        <ResultCard result={result} />
+      {message.quote && (
+        <blockquote className="mt-3 border-l-2 border-app-amber/60 pl-4">
+          <p className="text-base leading-relaxed text-app-text">
+            {message.quote}
+          </p>
+          <p className="mt-1.5 text-[12px] text-app-dim">
+            — {message.attribution || message.person}
+          </p>
+        </blockquote>
+      )}
+      {message.action && (
+        <div className="mt-4 rounded-card bg-app-amber/10 p-3">
+          <p className="app-eyebrow flex items-center gap-1.5 text-app-amber">
+            <Sparkles size={12} />
+            今日のアクション
+          </p>
+          <p className="mt-1 text-[15px] leading-relaxed text-app-text">
+            {message.action}
+          </p>
+        </div>
+      )}
+      {!message.quote && !message.action && message.raw && (
+        <p className="mt-3 text-sm text-app-text-soft">{message.raw}</p>
       )}
     </div>
   );
 }
 
-function Prerequisite({ stateReady, idealReady }) {
-  return (
-    <div className="jarvis-panel mt-3 flex items-start gap-3 p-4">
-      <AlertTriangle
-        size={18}
-        strokeWidth={1.75}
-        className="mt-0.5 shrink-0 text-amber-300/80"
-      />
-      <div className="space-y-1 text-sm">
-        <p className="font-display text-[11px] tracking-[0.22em] text-amber-200/80">
-          DATA_INSUFFICIENT
-        </p>
-        <ul className="space-y-0.5 font-body text-jarvis-text/80">
-          {!stateReady && <li>・先に今日の状態を記録してください</li>}
-          {!idealReady && <li>・Settingsで理想像診断を完了してください</li>}
-        </ul>
-      </div>
-    </div>
-  );
-}
-
-function GenerateButton({ onClick }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="group relative mt-3 flex w-full items-center justify-center gap-2 overflow-hidden border border-jarvis-cyan bg-jarvis-cyan/10 px-5 py-3 font-display text-sm font-semibold uppercase tracking-[0.28em] text-jarvis-accent shadow-glow transition hover:bg-jarvis-cyan/20"
-    >
-      <span
-        aria-hidden
-        className="pointer-events-none absolute inset-y-0 left-0 w-1/3 -skew-x-12 bg-gradient-to-r from-transparent via-jarvis-cyan/30 to-transparent animate-sweep"
-      />
-      <Sparkles size={16} strokeWidth={2.25} className="animate-pulse-glow" />
-      <span>今日のメッセージを生成</span>
-    </button>
-  );
-}
-
-function LoadingPanel() {
-  const [phase, setPhase] = useState(0);
-  const phases = [
-    'ANALYZING DAILY STATE',
-    'CROSS-REFERENCING IDEAL TYPE',
-    'GENERATING MORNING BRIEFING',
-  ];
-  useEffect(() => {
-    const t = setInterval(() => setPhase((p) => (p + 1) % phases.length), 900);
-    return () => clearInterval(t);
-  }, []);
-
-  return (
-    <div className="jarvis-panel relative mt-3 overflow-hidden p-5">
-      <span
-        aria-hidden
-        className="pointer-events-none absolute inset-y-0 left-0 w-1/3 -skew-x-12 bg-gradient-to-r from-transparent via-jarvis-cyan/25 to-transparent animate-sweep"
-      />
-      <div className="relative flex items-center gap-3">
-        <Loader2
-          size={22}
-          strokeWidth={2}
-          className="animate-spin text-jarvis-cyan drop-shadow-[0_0_6px_rgba(0,229,255,0.7)]"
-        />
-        <div className="min-w-0 flex-1">
-          <p className="font-display text-[11px] tracking-[0.22em] text-jarvis-cyan">
-            JARVIS // PROCESSING
-          </p>
-          <p
-            key={phase}
-            className="animate-fade-in mt-0.5 font-mono text-[12px] text-jarvis-accent"
-          >
-            {phases[phase]}
-            <span className="ml-1 inline-block w-2 animate-pulse-glow">_</span>
-          </p>
-        </div>
-      </div>
-      <div className="relative mt-4 space-y-2">
-        <div className="h-2 w-3/4 animate-pulse-glow bg-jarvis-cyan/15" />
-        <div className="h-2 w-1/2 animate-pulse-glow bg-jarvis-cyan/10" />
-        <div className="h-2 w-2/3 animate-pulse-glow bg-jarvis-cyan/15" />
-      </div>
-    </div>
-  );
-}
-
-function ErrorPanel({ error, onRetry }) {
-  return (
-    <div className="jarvis-panel mt-3 flex flex-col gap-3 border-red-400/40 p-4">
-      <div className="flex items-start gap-2">
-        <AlertTriangle
-          size={16}
-          strokeWidth={1.75}
-          className="mt-0.5 shrink-0 text-red-300"
-        />
-        <div className="min-w-0 flex-1">
-          <p className="font-display text-[11px] tracking-[0.22em] text-red-300">
-            GENERATION_FAILED
-          </p>
-          <p className="mt-1 break-words font-mono text-[12px] text-jarvis-text/80">
-            {error}
-          </p>
-        </div>
-      </div>
-      <button
-        type="button"
-        onClick={onRetry}
-        className="self-start border border-jarvis-border bg-jarvis-panel/60 px-3 py-1.5 font-display text-[11px] uppercase tracking-[0.22em] text-jarvis-dim transition hover:border-jarvis-cyan/60 hover:text-jarvis-accent"
+function PodcastCard({ podcast }) {
+  const top = podcast?.podcasts?.[0];
+  if (!top) {
+    return (
+      <a
+        href="/content"
+        className="app-card animate-fade-in flex items-center gap-3 p-4 transition hover:border-app-border-soft"
+        style={{ animationDelay: '120ms' }}
       >
-        再試行 · RETRY
-      </button>
-    </div>
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-app-fog/10 text-app-fog">
+          <Headphones size={16} strokeWidth={1.75} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="app-eyebrow">今日のおすすめPodcast</p>
+          <p className="mt-0.5 text-sm text-app-text-soft">
+            タップして探しに行く
+          </p>
+        </div>
+        <ChevronRight size={16} className="text-app-dim" />
+      </a>
+    );
+  }
+
+  return (
+    <a
+      href="/content"
+      className="app-card animate-fade-in block p-5 transition hover:border-app-border-soft"
+      style={{ animationDelay: '120ms' }}
+    >
+      <header className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Headphones size={14} className="text-app-fog" />
+          <p className="app-eyebrow">今日のおすすめPodcast</p>
+        </div>
+        <ChevronRight size={14} className="text-app-dim" />
+      </header>
+      <p className="mt-3 line-clamp-2 text-base font-medium leading-snug text-app-text">
+        {top.title}
+      </p>
+      <div className="mt-2 flex items-center gap-2">
+        {top.duration && (
+          <span className="app-chip app-chip-fog">{top.duration}</span>
+        )}
+        {podcast?.podcasts?.length > 1 && (
+          <span className="text-[11px] text-app-dim">
+            +{podcast.podcasts.length - 1} 件
+          </span>
+        )}
+      </div>
+      {top.reason && (
+        <p className="mt-3 line-clamp-2 text-[13px] leading-relaxed text-app-text-soft">
+          {top.reason}
+        </p>
+      )}
+    </a>
   );
 }
 
-function ResultCard({ result }) {
+function IdealTile({ ideal }) {
+  return (
+    <a
+      href="/settings"
+      className="app-card animate-fade-in block p-4 transition hover:border-app-border-soft"
+      style={{ animationDelay: '160ms' }}
+    >
+      <div className="flex items-center gap-1.5">
+        <Target size={12} className={ideal ? 'text-app-amber' : 'text-app-dim'} />
+        <p className="app-eyebrow">理想像</p>
+      </div>
+      {ideal ? (
+        <>
+          <p className="mt-1.5 text-base font-semibold text-app-text">
+            {ideal.typeLabel}
+          </p>
+          <p className="mt-0.5 text-[11px] text-app-dim">
+            適合 {ideal.matchScore ?? 0}%
+          </p>
+        </>
+      ) : (
+        <p className="mt-2 text-[13px] text-app-text-soft">未診断</p>
+      )}
+    </a>
+  );
+}
+
+function HabitTile({ habit }) {
+  const [shown, setShown] = useState(0);
+  const target = habit?.rate ?? 0;
+  useEffect(() => {
+    const t = setTimeout(() => setShown(target), 120);
+    return () => clearTimeout(t);
+  }, [target]);
+
+  return (
+    <a
+      href="/habit"
+      className="app-card animate-fade-in block p-4 transition hover:border-app-border-soft"
+      style={{ animationDelay: '160ms' }}
+    >
+      <div className="flex items-center gap-1.5">
+        <Activity
+          size={12}
+          className={
+            habit && habit.total > 0 ? 'text-app-amber' : 'text-app-dim'
+          }
+        />
+        <p className="app-eyebrow">今日の達成率</p>
+      </div>
+      {habit && habit.total > 0 ? (
+        <>
+          <p className="mt-1.5 text-base font-semibold text-app-text">
+            {habit.rate}
+            <span className="ml-0.5 text-xs font-normal text-app-dim">%</span>
+            <span className="ml-2 text-[11px] font-normal text-app-dim">
+              {habit.completed} / {habit.total}
+            </span>
+          </p>
+          <div className="mt-2 h-1 overflow-hidden rounded-full bg-app-border/60">
+            <div
+              className="h-full bg-app-amber transition-[width] duration-700 ease-out"
+              style={{ width: `${shown}%` }}
+            />
+          </div>
+        </>
+      ) : (
+        <p className="mt-2 text-[13px] text-app-text-soft">習慣を追加</p>
+      )}
+    </a>
+  );
+}
+
+function StateTile({ state, onSave }) {
+  const [expanded, setExpanded] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const score = calcStateScore(state || {});
+  const recorded = score != null;
+
+  if (!recorded || editing) {
+    return (
+      <StateEditor
+        initial={state}
+        onCancel={editing ? () => setEditing(false) : null}
+        onSave={(v) => {
+          onSave(v);
+          setEditing(false);
+          setExpanded(true);
+        }}
+      />
+    );
+  }
+
   return (
     <div
-      className="jarvis-panel animate-glow-in relative mt-3 overflow-hidden p-5"
-      style={{ animationDelay: '60ms' }}
+      className="app-card animate-fade-in p-5"
+      style={{ animationDelay: '200ms' }}
     >
-      <span
-        aria-hidden
-        className="pointer-events-none absolute inset-y-0 left-0 w-1/3 -skew-x-12 bg-gradient-to-r from-transparent via-jarvis-cyan/15 to-transparent animate-sweep"
-      />
-
-      {result.quote ? (
-        <div
-          className="animate-fade-in relative"
-          style={{ animationDelay: '120ms' }}
-        >
-          <p className="flex items-center gap-2 font-display text-[10px] tracking-[0.28em] text-jarvis-cyan">
-            <Quote size={12} strokeWidth={2} />
-            <span>QUOTE · 名言</span>
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="flex w-full items-center justify-between text-left"
+      >
+        <div>
+          <p className="app-eyebrow">今日の状態</p>
+          <p className="mt-1">
+            <span className="font-display text-3xl font-bold text-app-amber">
+              {score}
+            </span>
+            <span className="ml-1 text-sm text-app-dim">/100</span>
+            <span className="ml-3 text-[12px] text-app-text-soft">
+              {scoreLabel(score)}
+            </span>
           </p>
-          <p
-            className="mt-2 font-display text-[18px] leading-relaxed text-jarvis-accent"
-            style={{ textShadow: '0 0 8px rgba(0, 229, 255, 0.45)' }}
+        </div>
+        <ChevronDown
+          size={18}
+          className={[
+            'text-app-dim transition-transform',
+            expanded ? 'rotate-180' : '',
+          ].join(' ')}
+        />
+      </button>
+
+      {expanded && (
+        <div className="mt-4 space-y-2.5 border-t border-app-border pt-4">
+          <Breakdown label="気分" value={state.mood} icon={Smile} />
+          <Breakdown label="体調" value={state.energy} icon={BatteryCharging} />
+          <Breakdown label="やる気" value={state.motivation} icon={Sparkles} />
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            className="app-btn-ghost mt-2"
           >
-            「{result.quote}」
-          </p>
+            <Pencil size={12} />
+            <span>修正</span>
+          </button>
         </div>
-      ) : null}
-
-      {result.quote && result.action ? (
-        <div className="jarvis-divider my-4" />
-      ) : null}
-
-      {result.action ? (
-        <div
-          className="animate-fade-in relative"
-          style={{ animationDelay: '220ms' }}
-        >
-          <p className="flex items-center gap-2 font-display text-[10px] tracking-[0.28em] text-jarvis-cyan">
-            <ArrowRight size={12} strokeWidth={2.25} />
-            <span>ACTION · 今日の一手</span>
-          </p>
-          <p className="mt-2 font-body text-base leading-relaxed text-jarvis-text">
-            {result.action}
-          </p>
-        </div>
-      ) : null}
-
-      {!result.quote && !result.action ? (
-        <p className="font-body text-sm text-jarvis-text">{result.raw}</p>
-      ) : null}
+      )}
     </div>
   );
 }
 
-function InputView({ values, ready, onChange, onSave }) {
+function Breakdown({ label, value, icon: Icon }) {
   return (
-    <div className="mt-6 space-y-5">
-      <header
-        className="animate-fade-in"
-        style={{ animationDelay: '80ms' }}
-      >
-        <p className="jarvis-subtitle text-[11px]">
-          // STATE_INPUT · {todayISO()}
-        </p>
-        <h2 className="font-display text-xl tracking-[0.18em] text-jarvis-accent">
-          今日のあなたの状態を記録
-        </h2>
+    <div className="flex items-center gap-3">
+      <Icon size={14} className="shrink-0 text-app-dim" />
+      <span className="w-14 text-[13px] text-app-text-soft">{label}</span>
+      <div className="flex flex-1 gap-1">
+        {LEVELS.map((n) => (
+          <span
+            key={n}
+            className={[
+              'h-1.5 flex-1 rounded-full transition-all',
+              n <= value ? 'bg-app-amber' : 'bg-app-border/60',
+            ].join(' ')}
+          />
+        ))}
+      </div>
+      <span className="w-8 text-right font-mono text-[11px] text-app-dim">
+        {value}/5
+      </span>
+    </div>
+  );
+}
+
+function StateEditor({ initial, onSave, onCancel }) {
+  const [mood, setMood] = useState(initial?.mood || 0);
+  const [energy, setEnergy] = useState(initial?.energy || 0);
+  const [motivation, setMotivation] = useState(initial?.motivation || 0);
+
+  const ready = mood > 0 && energy > 0 && motivation > 0;
+  const score = calcStateScore({ mood, energy, motivation });
+
+  return (
+    <div
+      className="app-card animate-fade-in space-y-4 p-5"
+      style={{ animationDelay: '200ms' }}
+    >
+      <header>
+        <p className="app-eyebrow">今日の状態を記録</p>
+        <h2 className="app-title mt-0.5 text-lg">気分・体調・やる気</h2>
       </header>
 
-      <ul className="space-y-3">
-        {METRICS.map((metric, i) => (
-          <li
-            key={metric.key}
-            className="animate-fade-in"
-            style={{ animationDelay: `${160 + i * 90}ms` }}
-          >
-            <MetricRow
-              metric={metric}
-              value={values[metric.key]}
-              onChange={(n) => onChange(metric.key, n)}
-            />
-          </li>
-        ))}
-      </ul>
+      <LevelRow label="気分" icon={Smile} value={mood} onChange={setMood} />
+      <LevelRow
+        label="体調"
+        icon={BatteryCharging}
+        value={energy}
+        onChange={setEnergy}
+      />
+      <LevelRow
+        label="やる気"
+        icon={Sparkles}
+        value={motivation}
+        onChange={setMotivation}
+      />
 
-      <div
-        className="animate-fade-in pt-2"
-        style={{ animationDelay: '480ms' }}
-      >
+      <div className="flex items-center justify-between rounded-card bg-app-bg-elev px-3 py-2.5">
+        <p className="text-[12px] text-app-text-soft">スコア</p>
+        <p className="font-display text-xl font-bold text-app-amber">
+          {score ?? '--'}
+          <span className="ml-0.5 text-[11px] font-normal text-app-dim">
+            /100
+          </span>
+        </p>
+      </div>
+
+      <div className="flex items-center justify-end gap-2">
+        {onCancel && (
+          <button type="button" onClick={onCancel} className="app-btn-ghost">
+            キャンセル
+          </button>
+        )}
         <button
           type="button"
-          onClick={onSave}
+          onClick={() => onSave({ mood, energy, motivation })}
           disabled={!ready}
-          aria-disabled={!ready}
-          className={[
-            'group relative flex w-full items-center justify-center gap-2 overflow-hidden border px-5 py-3 font-display text-sm font-semibold uppercase tracking-[0.28em] transition',
-            ready
-              ? 'border-jarvis-cyan bg-jarvis-cyan/10 text-jarvis-accent shadow-glow hover:bg-jarvis-cyan/20'
-              : 'cursor-not-allowed border-jarvis-border bg-jarvis-panel/60 text-jarvis-dim',
-          ].join(' ')}
+          className="app-btn-primary"
         >
-          {ready && (
-            <span
-              aria-hidden
-              className="pointer-events-none absolute inset-y-0 left-0 w-1/3 -skew-x-12 bg-gradient-to-r from-transparent via-jarvis-cyan/30 to-transparent animate-sweep"
-            />
-          )}
-          <Check size={16} strokeWidth={2.25} />
-          <span>{ready ? 'SYNC · 状態を確定' : 'AWAITING INPUT'}</span>
+          <Check size={14} strokeWidth={2.5} />
+          <span>記録</span>
         </button>
       </div>
     </div>
   );
 }
 
-function MetricRow({ metric, value, onChange }) {
-  const Icon = metric.icon;
+function LevelRow({ icon: Icon, label, value, onChange }) {
   return (
-    <div className="jarvis-panel relative px-4 py-3">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <span
-            className={[
-              'flex h-9 w-9 items-center justify-center border transition',
-              value > 0
-                ? 'border-jarvis-cyan/70 text-jarvis-accent shadow-glow-soft'
-                : 'border-jarvis-border text-jarvis-dim',
-            ].join(' ')}
-            aria-hidden
-          >
-            <Icon size={18} strokeWidth={1.75} />
-          </span>
-          <div className="leading-tight">
-            <p className="font-display text-sm font-semibold tracking-[0.22em] text-jarvis-accent">
-              {metric.label}
-            </p>
-            <p className="jarvis-subtitle text-[11px]">{metric.sub}</p>
-          </div>
-        </div>
-        <span
-          className={[
-            'font-mono text-xs tracking-widest',
-            value > 0 ? 'text-jarvis-cyan' : 'text-jarvis-dim',
-          ].join(' ')}
-        >
+    <div>
+      <div className="flex items-center justify-between">
+        <span className="flex items-center gap-2 text-[13px] text-app-text-soft">
+          <Icon size={14} className="text-app-dim" />
+          {label}
+        </span>
+        <span className="font-mono text-[11px] text-app-dim">
           {value > 0 ? `${value} / 5` : '— / 5'}
         </span>
       </div>
-
-      <div className="mt-3" role="radiogroup" aria-label={metric.label}>
-        <div className="flex gap-1.5">
-          {LEVELS.map((n) => {
-            const filled = n <= value;
-            const isPeak = n === value;
-            return (
-              <button
-                key={n}
-                type="button"
-                role="radio"
-                aria-checked={isPeak}
-                aria-label={`${metric.label} レベル ${n}`}
-                onClick={() => onChange(n)}
-                className={[
-                  'group relative h-9 flex-1 border transition-all duration-200',
-                  filled
-                    ? 'border-jarvis-cyan bg-jarvis-cyan/15'
-                    : 'border-jarvis-border bg-jarvis-panel/40 hover:border-jarvis-blue/60 hover:bg-jarvis-blue/5',
-                  isPeak ? 'shadow-glow' : '',
-                ].join(' ')}
-              >
-                <span
-                  className={[
-                    'block font-mono text-[11px]',
-                    filled ? 'text-jarvis-accent' : 'text-jarvis-dim',
-                  ].join(' ')}
-                >
-                  {n}
-                </span>
-                {isPeak && (
-                  <span
-                    aria-hidden
-                    className="pointer-events-none absolute inset-x-1 bottom-0 h-0.5 bg-jarvis-cyan animate-pulse-glow"
-                  />
-                )}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function SummaryView({ state, onEdit }) {
-  return (
-    <div className="mt-6 space-y-5">
-      <header
-        className="animate-fade-in"
-        style={{ animationDelay: '60ms' }}
-      >
-        <p className="jarvis-subtitle text-[11px]">
-          // SYSTEM_SYNCED · {state.date}
-        </p>
-        <h2 className="font-display text-xl tracking-[0.18em] text-jarvis-accent">
-          今日のあなたの状態
-        </h2>
-      </header>
-
-      <div
-        className="jarvis-panel animate-glow-in relative overflow-hidden p-5"
-        style={{ animationDelay: '140ms' }}
-      >
-        <span
-          aria-hidden
-          className="pointer-events-none absolute inset-y-0 left-0 w-1/3 -skew-x-12 bg-gradient-to-r from-transparent via-jarvis-cyan/15 to-transparent animate-sweep"
-        />
-        <ul className="relative space-y-4">
-          {METRICS.map((metric, i) => (
-            <li
-              key={metric.key}
-              className="animate-fade-in"
-              style={{ animationDelay: `${220 + i * 90}ms` }}
+      <div className="mt-2 flex gap-1.5">
+        {LEVELS.map((n) => {
+          const filled = n <= value;
+          return (
+            <button
+              key={n}
+              type="button"
+              onClick={() => onChange(n)}
+              aria-label={`${label} ${n}`}
+              className={[
+                'h-9 flex-1 rounded-chip border text-[12px] transition-all',
+                filled
+                  ? 'border-app-amber/60 bg-app-amber/15 text-app-amber'
+                  : 'border-app-border bg-app-bg-elev text-app-dim hover:border-app-border-soft',
+              ].join(' ')}
             >
-              <SummaryRow metric={metric} value={state[metric.key]} />
-            </li>
-          ))}
-        </ul>
-      </div>
-
-      <div
-        className="animate-fade-in"
-        style={{ animationDelay: '520ms' }}
-      >
-        <button
-          type="button"
-          onClick={onEdit}
-          className="flex items-center gap-2 border border-jarvis-border bg-jarvis-panel/60 px-4 py-2 font-display text-xs font-semibold uppercase tracking-[0.28em] text-jarvis-dim transition hover:border-jarvis-cyan/60 hover:text-jarvis-accent hover:shadow-glow-soft"
-        >
-          <Pencil size={14} strokeWidth={2} />
-          <span>修正 · EDIT</span>
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function SummaryRow({ metric, value }) {
-  const Icon = metric.icon;
-  return (
-    <div className="flex items-center gap-4">
-      <span className="flex h-10 w-10 items-center justify-center border border-jarvis-cyan/70 text-jarvis-accent shadow-glow-soft">
-        <Icon size={20} strokeWidth={1.75} />
-      </span>
-      <div className="flex-1">
-        <div className="flex items-baseline justify-between">
-          <p className="font-display text-sm font-semibold tracking-[0.22em] text-jarvis-accent">
-            {metric.label}
-            <span className="ml-2 text-[11px] font-normal tracking-[0.12em] text-jarvis-dim">
-              {metric.sub}
-            </span>
-          </p>
-          <p className="font-mono text-sm text-jarvis-cyan">{value} / 5</p>
-        </div>
-        <div className="mt-1.5 flex gap-1">
-          {LEVELS.map((n) => {
-            const filled = n <= value;
-            return (
-              <span
-                key={n}
-                aria-hidden
-                className={[
-                  'h-1.5 flex-1 transition-all',
-                  filled
-                    ? 'bg-jarvis-cyan shadow-[0_0_8px_rgba(0,229,255,0.6)]'
-                    : 'bg-jarvis-border/60',
-                ].join(' ')}
-              />
-            );
-          })}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function YesterdayMessage() {
-  const [yState, setYState] = useState(null);
-
-  useEffect(() => {
-    const y = loadYesterdayState();
-    if (y && y.nextAction && y.nextAction.trim()) {
-      setYState(y);
-    }
-  }, []);
-
-  if (!yState) return null;
-
-  return (
-    <div
-      className="jarvis-panel animate-glow-in relative mt-6 overflow-hidden p-4"
-      style={{ animationDelay: '40ms' }}
-    >
-      <span
-        aria-hidden
-        className="pointer-events-none absolute inset-y-0 left-0 w-1/3 -skew-x-12 bg-gradient-to-r from-transparent via-jarvis-cyan/15 to-transparent animate-sweep"
-      />
-      <div className="relative flex items-start gap-3">
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center border border-jarvis-cyan/70 text-jarvis-accent shadow-glow-soft">
-          <Sunrise size={16} strokeWidth={1.75} />
-        </span>
-        <div className="min-w-0 flex-1">
-          <p className="flex items-center gap-2 font-display text-[10px] tracking-[0.24em] text-jarvis-cyan">
-            <span>FROM_YESTERDAY</span>
-            <span className="font-mono text-[10px] tracking-[0.14em] text-jarvis-dim">
-              · {yState.date}
-            </span>
-          </p>
-          <p className="jarvis-subtitle text-[10px]">// 昨日の自分より</p>
-          <p
-            className="mt-1 font-body text-base leading-relaxed text-jarvis-accent"
-            style={{ textShadow: '0 0 6px rgba(0, 229, 255, 0.35)' }}
-          >
-            「{yState.nextAction}」
-          </p>
-        </div>
+              {n}
+            </button>
+          );
+        })}
       </div>
     </div>
   );
@@ -838,20 +708,14 @@ function NightReview({ saved, onSave }) {
   if (!saved) {
     return (
       <div
-        className="jarvis-panel animate-fade-in mt-8 flex items-start gap-3 p-4"
-        style={{ animationDelay: '380ms' }}
+        className="app-card animate-fade-in flex items-start gap-3 p-4"
+        style={{ animationDelay: '300ms' }}
       >
-        <Moon
-          size={18}
-          strokeWidth={1.75}
-          className="mt-0.5 shrink-0 text-jarvis-cyan"
-        />
-        <div className="min-w-0">
-          <p className="font-display text-[11px] tracking-[0.24em] text-jarvis-cyan">
-            NIGHT_REVIEW · 夜の振り返り
-          </p>
-          <p className="mt-1 font-body text-sm text-jarvis-text/80">
-            まずは今日の状態（気分・体調・やる気）を記録すると、振り返りも保存できます。
+        <Moon size={16} className="mt-0.5 shrink-0 text-app-fog" />
+        <div>
+          <p className="app-eyebrow">夜の振り返り</p>
+          <p className="mt-1 text-[13px] text-app-text-soft">
+            まずは今日の状態を記録すると振り返りも保存できます。
           </p>
         </div>
       </div>
@@ -884,7 +748,6 @@ function NightReview({ saved, onSave }) {
 function NightReviewForm({ initial, onSave, onCancel }) {
   const [review, setReview] = useState(initial.review);
   const [nextAction, setNextAction] = useState(initial.nextAction);
-
   const ready = review.trim().length > 0 && nextAction.trim().length > 0;
 
   function submit(e) {
@@ -896,299 +759,96 @@ function NightReviewForm({ initial, onSave, onCancel }) {
   return (
     <form
       onSubmit={submit}
-      className="jarvis-panel animate-fade-in mt-8 space-y-3 p-5"
-      style={{ animationDelay: '380ms' }}
+      className="app-card animate-fade-in space-y-3 p-5"
+      style={{ animationDelay: '300ms' }}
     >
-      <header className="flex items-baseline justify-between">
-        <p className="flex items-center gap-2 font-display text-[11px] tracking-[0.24em] text-jarvis-cyan">
-          <Moon size={13} strokeWidth={2} />
-          <span>夜の振り返り</span>
-        </p>
-        <p className="jarvis-subtitle text-[10px]">// NIGHT_REVIEW</p>
+      <header className="flex items-center gap-2">
+        <Moon size={14} className="text-app-fog" />
+        <p className="app-eyebrow">夜の振り返り</p>
       </header>
-
       <div>
-        <NightLabel ja="今日の一言" en="REVIEW" required icon={MessageSquare} />
+        <label className="mb-1.5 flex items-center gap-1.5 text-[12px] text-app-text-soft">
+          <MessageSquare size={11} />
+          今日の一言
+        </label>
         <textarea
           value={review}
           onChange={(e) => setReview(e.target.value)}
           placeholder="例：会議で発言できた / 朝の集中が続いた"
           rows={3}
           maxLength={300}
-          className="mt-1.5 w-full resize-y border border-jarvis-border bg-jarvis-bg/60 px-3 py-2 font-body text-jarvis-text placeholder:text-jarvis-dim/70 outline-none transition focus:border-jarvis-cyan focus:shadow-glow-soft"
+          className="app-input resize-y"
         />
       </div>
-
       <div>
-        <NightLabel
-          ja="明日の最小アクション"
-          en="NEXT_ACTION"
-          required
-          icon={Sunrise}
-        />
+        <label className="mb-1.5 flex items-center gap-1.5 text-[12px] text-app-text-soft">
+          <Sunrise size={11} />
+          明日の最小アクション
+        </label>
         <input
           type="text"
           value={nextAction}
           onChange={(e) => setNextAction(e.target.value)}
           placeholder="例：朝7時に起きる / 1ページだけ読む"
           maxLength={120}
-          className="mt-1.5 w-full border border-jarvis-border bg-jarvis-bg/60 px-3 py-2 font-body text-jarvis-text placeholder:text-jarvis-dim/70 outline-none transition focus:border-jarvis-cyan focus:shadow-glow-soft"
+          className="app-input"
         />
       </div>
-
-      <div className="flex items-center gap-2 pt-1">
-        <button
-          type="submit"
-          disabled={!ready}
-          className={[
-            'group relative flex flex-1 items-center justify-center gap-2 overflow-hidden border px-5 py-3 font-display text-sm font-semibold uppercase tracking-[0.28em] transition',
-            ready
-              ? 'border-jarvis-cyan bg-jarvis-cyan/10 text-jarvis-accent shadow-glow hover:bg-jarvis-cyan/20'
-              : 'cursor-not-allowed border-jarvis-border bg-jarvis-panel/60 text-jarvis-dim',
-          ].join(' ')}
-        >
-          {ready && (
-            <span
-              aria-hidden
-              className="pointer-events-none absolute inset-y-0 left-0 w-1/3 -skew-x-12 bg-gradient-to-r from-transparent via-jarvis-cyan/30 to-transparent animate-sweep"
-            />
-          )}
-          <Check size={16} strokeWidth={2.25} />
-          <span>振り返りを保存</span>
-        </button>
+      <div className="flex items-center justify-end gap-2">
         {onCancel && (
-          <button
-            type="button"
-            onClick={onCancel}
-            className="border border-jarvis-border bg-jarvis-panel/60 px-3 py-2 font-display text-[11px] uppercase tracking-[0.22em] text-jarvis-dim transition hover:border-jarvis-cyan/60 hover:text-jarvis-accent"
-          >
+          <button type="button" onClick={onCancel} className="app-btn-ghost">
             キャンセル
           </button>
         )}
+        <button type="submit" disabled={!ready} className="app-btn-primary">
+          <Check size={14} strokeWidth={2.5} />
+          <span>保存</span>
+        </button>
       </div>
     </form>
-  );
-}
-
-function NightLabel({ ja, en, required, icon: Icon }) {
-  return (
-    <span className="flex items-baseline gap-2">
-      {Icon && (
-        <Icon size={11} strokeWidth={2} className="text-jarvis-cyan" />
-      )}
-      <span className="font-display text-[11px] tracking-[0.22em] text-jarvis-accent">
-        {ja}
-        {required && <span className="ml-0.5 text-jarvis-cyan">*</span>}
-      </span>
-      <span className="font-mono text-[10px] tracking-[0.16em] text-jarvis-dim">
-        {en}
-      </span>
-    </span>
   );
 }
 
 function NightReviewSummary({ saved, onEdit }) {
   return (
     <div
-      className="jarvis-panel animate-glow-in relative mt-8 overflow-hidden p-5"
-      style={{ animationDelay: '60ms' }}
+      className="app-card animate-fade-in p-5"
+      style={{ animationDelay: '300ms' }}
     >
-      <span
-        aria-hidden
-        className="pointer-events-none absolute inset-y-0 left-0 w-1/3 -skew-x-12 bg-gradient-to-r from-transparent via-jarvis-cyan/20 to-transparent animate-sweep"
-      />
-      <div className="relative">
-        <header className="flex items-center gap-2">
-          <Sparkles
-            size={16}
-            strokeWidth={1.75}
-            className="animate-pulse-glow text-jarvis-cyan"
-          />
-          <p className="font-display text-[11px] tracking-[0.24em] text-jarvis-cyan">
-            EVENING_LOG_SAVED
-          </p>
-        </header>
-        <p
-          className="animate-fade-in mt-2 font-display text-2xl tracking-[0.16em] text-jarvis-accent"
-          style={{
-            textShadow: '0 0 10px rgba(0, 229, 255, 0.55)',
-            animationDelay: '120ms',
-          }}
-        >
-          今日もお疲れ様でした
-        </p>
-        <p
-          className="animate-fade-in jarvis-subtitle mt-1 text-[10px]"
-          style={{ animationDelay: '180ms' }}
-        >
-          // GOOD_NIGHT · {saved.date}
-        </p>
+      <header className="flex items-center gap-2">
+        <Sparkles size={14} className="text-app-amber" />
+        <p className="app-eyebrow">今日もお疲れさま</p>
+      </header>
 
-        <div className="jarvis-divider my-4" />
-
-        <div
-          className="animate-fade-in"
-          style={{ animationDelay: '260ms' }}
-        >
-          <p className="flex items-center gap-2 font-display text-[10px] tracking-[0.22em] text-jarvis-cyan">
-            <MessageSquare size={11} strokeWidth={2} />
-            <span>今日の一言 · REVIEW</span>
+      <div className="mt-3 space-y-3">
+        <div>
+          <p className="mb-1 flex items-center gap-1.5 text-[12px] text-app-dim">
+            <MessageSquare size={11} />
+            今日の一言
           </p>
-          <p className="mt-1.5 whitespace-pre-wrap font-body text-base leading-relaxed text-jarvis-text">
+          <p className="whitespace-pre-wrap text-[15px] leading-relaxed text-app-text">
             {saved.review}
           </p>
         </div>
-
-        <div
-          className="animate-fade-in mt-4 border-l-2 border-jarvis-cyan/60 pl-3"
-          style={{ animationDelay: '340ms' }}
-        >
-          <p className="flex items-center gap-2 font-display text-[10px] tracking-[0.22em] text-jarvis-cyan">
-            <Sunrise size={11} strokeWidth={2} />
-            <span>明日の最小アクション · NEXT</span>
+        <div className="border-l-2 border-app-amber/50 pl-3">
+          <p className="mb-1 flex items-center gap-1.5 text-[12px] text-app-dim">
+            <Sunrise size={11} />
+            明日の最小アクション
           </p>
-          <p
-            className="mt-1.5 font-body text-base leading-relaxed text-jarvis-accent"
-            style={{ textShadow: '0 0 6px rgba(0, 229, 255, 0.4)' }}
-          >
+          <p className="text-[15px] leading-relaxed text-app-amber">
             {saved.nextAction}
           </p>
         </div>
-
-        <div
-          className="animate-fade-in mt-5 flex items-center gap-2"
-          style={{ animationDelay: '420ms' }}
-        >
-          <button
-            type="button"
-            onClick={onEdit}
-            className="flex items-center gap-1.5 border border-jarvis-border bg-jarvis-panel/60 px-3 py-1.5 font-display text-[11px] uppercase tracking-[0.24em] text-jarvis-dim transition hover:border-jarvis-cyan/60 hover:text-jarvis-accent"
-          >
-            <Pencil size={11} strokeWidth={2} />
-            <span>修正</span>
-          </button>
-        </div>
       </div>
-    </div>
-  );
-}
 
-function StatusBoard() {
-  const [data, setData] = useState({ ideal: null, habit: null });
-
-  useEffect(() => {
-    function refresh() {
-      setData({ ideal: loadIdealType(), habit: loadHabitsToday() });
-    }
-    refresh();
-    window.addEventListener('focus', refresh);
-    window.addEventListener('storage', refresh);
-    return () => {
-      window.removeEventListener('focus', refresh);
-      window.removeEventListener('storage', refresh);
-    };
-  }, []);
-
-  return (
-    <div
-      className="animate-fade-in mt-4 grid grid-cols-2 gap-2"
-      style={{ animationDelay: '60ms' }}
-    >
-      <IdealTile ideal={data.ideal} />
-      <HabitTile habit={data.habit} />
-    </div>
-  );
-}
-
-function IdealTile({ ideal }) {
-  return (
-    <div className="jarvis-panel relative overflow-hidden p-3 sm:p-4">
-      <div className="flex items-center gap-1.5">
-        <Target
-          size={12}
-          strokeWidth={2}
-          className={ideal ? 'text-jarvis-cyan' : 'text-jarvis-dim'}
-        />
-        <span className="font-display text-[10px] tracking-[0.22em] text-jarvis-cyan">
-          IDEAL
-        </span>
-      </div>
-      <p className="jarvis-subtitle text-[10px]">// 理想像</p>
-      {ideal ? (
-        <>
-          <p
-            className="mt-1.5 truncate font-display text-base tracking-[0.14em] text-jarvis-accent sm:text-lg"
-            style={{ textShadow: '0 0 6px rgba(0, 229, 255, 0.45)' }}
-            title={ideal.typeLabel}
-          >
-            {ideal.typeLabel}
-          </p>
-          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[10px] tabular-nums">
-            <span className="text-jarvis-cyan">
-              MATCH {ideal.matchScore ?? 0}%
-            </span>
-            <span className="text-jarvis-dim/70">·</span>
-            <span className="text-jarvis-dim">GAP {ideal.gapScore ?? 0}%</span>
-          </div>
-        </>
-      ) : (
-        <p className="mt-2 font-mono text-[11px] text-jarvis-dim">
-          Settingsで診断
-        </p>
-      )}
-    </div>
-  );
-}
-
-function HabitTile({ habit }) {
-  const [shown, setShown] = useState(0);
-  const target = habit?.rate ?? 0;
-  useEffect(() => {
-    const t = setTimeout(() => setShown(target), 120);
-    return () => clearTimeout(t);
-  }, [target]);
-
-  return (
-    <div className="jarvis-panel relative overflow-hidden p-3 sm:p-4">
-      <div className="flex items-center gap-1.5">
-        <Activity
-          size={12}
-          strokeWidth={2}
-          className={habit && habit.total > 0 ? 'text-jarvis-cyan' : 'text-jarvis-dim'}
-        />
-        <span className="font-display text-[10px] tracking-[0.22em] text-jarvis-cyan">
-          HABIT
-        </span>
-      </div>
-      <p className="jarvis-subtitle text-[10px]">// 今日の達成率</p>
-      {habit && habit.total > 0 ? (
-        <>
-          <div className="mt-1.5 flex items-baseline gap-1.5">
-            <p
-              className="font-display text-base font-bold tabular-nums text-jarvis-accent sm:text-lg"
-              style={{ textShadow: '0 0 6px rgba(0, 229, 255, 0.45)' }}
-            >
-              {habit.rate}
-              <span className="ml-0.5 font-body text-xs text-jarvis-dim">
-                %
-              </span>
-            </p>
-            <p className="font-mono text-[10px] text-jarvis-dim">
-              {habit.completed} / {habit.total}
-            </p>
-          </div>
-          <div className="mt-1.5 h-1 overflow-hidden bg-jarvis-border/60">
-            <div
-              className="h-full bg-jarvis-cyan shadow-[0_0_6px_rgba(0,229,255,0.55)] transition-[width] duration-700 ease-out"
-              style={{ width: `${shown}%` }}
-            />
-          </div>
-        </>
-      ) : (
-        <p className="mt-2 font-mono text-[11px] text-jarvis-dim">
-          Habitで習慣を追加
-        </p>
-      )}
+      <button
+        type="button"
+        onClick={onEdit}
+        className="app-btn-ghost mt-4"
+      >
+        <Pencil size={12} />
+        <span>修正</span>
+      </button>
     </div>
   );
 }

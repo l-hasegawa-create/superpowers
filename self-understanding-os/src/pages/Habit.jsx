@@ -121,11 +121,10 @@ export default function Habit() {
 
   return (
     <section className="mx-auto max-w-3xl">
-      <div className="animate-fade-in">
-        <p className="jarvis-subtitle text-xs">// MODULE_02</p>
-        <h1 className="jarvis-title mt-1 text-3xl">HABIT</h1>
-        <div className="jarvis-divider mt-3" />
-      </div>
+      <header className="animate-fade-in pt-2">
+        <p className="app-eyebrow">習慣を育てる</p>
+        <h1 className="app-title mt-0.5 text-2xl">今日のチェック</h1>
+      </header>
 
       <DailySummary stats={stats} today={today} />
       <AddForm onAdd={add} />

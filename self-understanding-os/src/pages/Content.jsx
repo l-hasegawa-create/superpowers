@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   AlertTriangle,
   Clock,
@@ -8,281 +8,96 @@ import {
   Search,
   Sparkles,
 } from 'lucide-react';
-
-const CACHE_KEY = 'podcastRecommendations';
-const DAILY_STATE_KEY = 'dailyState';
-const HABIT_STATS_KEY = 'habitDailyStats';
-const INTERESTS_KEY = 'interests';
-
-const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
-const ANTHROPIC_MODEL = 'claude-sonnet-4-20250514';
-
-const PROMPT_TEMPLATE = `ユーザーの状態に合わせて最適なPodcastを1〜3件提案してください。
-条件：理由を必ずつける・再生時間も記載・今の状態に合うもの
-気分: {{mood}} 興味: {{interests}} 行動状況: {{habit_done_rate}}`;
-
-const SYSTEM_PROMPT = `あなたはPodcastの推薦エンジンです。応答はJSONオブジェクトのみで返してください。コードブロックや前置きは含めないでください。
-
-スキーマ:
-{"podcasts":[{"title":"Podcastのタイトル","duration":"再生時間（例：30分、1時間15分）","reason":"なぜ今のユーザーに合うかの理由（80字以内）"}]}
-
-podcasts配列は1〜3件。日本語で回答してください。`;
-
-function todayISO() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-
-function loadJSON(key) {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
-}
-
-function loadInterests() {
-  try {
-    return (localStorage.getItem(INTERESTS_KEY) || '').trim();
-  } catch {
-    return '';
-  }
-}
-
-function buildPrompt({ mood, interests, habitRate }) {
-  return PROMPT_TEMPLATE.replace('{{mood}}', String(mood))
-    .replace('{{interests}}', interests)
-    .replace('{{habit_done_rate}}', `${habitRate}%`);
-}
-
-function parsePodcasts(text) {
-  if (!text) return [];
-  const sources = [];
-  const codeBlock = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-  if (codeBlock) sources.push(codeBlock[1]);
-  sources.push(text);
-  for (const src of sources) {
-    const start = src.indexOf('{');
-    const end = src.lastIndexOf('}');
-    if (start === -1 || end === -1 || end <= start) continue;
-    try {
-      const parsed = JSON.parse(src.slice(start, end + 1));
-      if (Array.isArray(parsed.podcasts)) {
-        return parsed.podcasts
-          .filter((p) => p && typeof p.title === 'string' && p.title.trim())
-          .slice(0, 3)
-          .map((p) => ({
-            title: String(p.title).trim(),
-            duration: String(p.duration || '').trim(),
-            reason: String(p.reason || '').trim(),
-          }));
-      }
-    } catch {
-      /* try next */
-    }
-  }
-  return [];
-}
-
-async function callClaudeAPI(prompt) {
-  const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    throw new Error(
-      'APIキーが未設定です。.env に VITE_ANTHROPIC_API_KEY を設定してください。',
-    );
-  }
-  const res = await fetch(ANTHROPIC_API_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
-    },
-    body: JSON.stringify({
-      model: ANTHROPIC_MODEL,
-      max_tokens: 1500,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: prompt }],
-    }),
-  });
-  if (!res.ok) {
-    let detail = '';
-    try {
-      const err = await res.json();
-      detail = err?.error?.message || '';
-    } catch {
-      /* ignore */
-    }
-    throw new Error(detail || `API error ${res.status}`);
-  }
-  const data = await res.json();
-  const block = data.content?.find((b) => b.type === 'text');
-  return block?.text ?? '';
-}
+import { readPodcastInputs, usePodcast } from '../lib/usePodcast.js';
 
 export default function Content() {
-  const [status, setStatus] = useState('idle');
-  const [error, setError] = useState(null);
-  const [result, setResult] = useState(null);
-  const [tick, setTick] = useState(0);
-
-  const inputs = useMemo(() => {
-    const dailyState = loadJSON(DAILY_STATE_KEY);
-    const stats = loadJSON(HABIT_STATS_KEY);
-    const interests = loadInterests();
-    const today = todayISO();
-    return {
-      mood: dailyState && dailyState.date === today ? dailyState.mood : null,
-      habitRate: stats && stats.date === today ? stats.rate : null,
-      interests,
-    };
-  }, [tick]);
+  const { status, error, result, generate } = usePodcast();
+  const [inputs, setInputs] = useState(() => readPodcastInputs());
 
   useEffect(() => {
-    const cached = loadJSON(CACHE_KEY);
-    if (cached && Array.isArray(cached.podcasts) && cached.podcasts.length > 0) {
-      setResult(cached);
-      setStatus('success');
-    }
-    const onFocus = () => setTick((t) => t + 1);
-    window.addEventListener('focus', onFocus);
-    return () => window.removeEventListener('focus', onFocus);
-  }, []);
+    const refresh = () => setInputs(readPodcastInputs());
+    refresh();
+    window.addEventListener('focus', refresh);
+    window.addEventListener('storage', refresh);
+    return () => {
+      window.removeEventListener('focus', refresh);
+      window.removeEventListener('storage', refresh);
+    };
+  }, [result]);
 
-  const moodReady = inputs.mood !== null && inputs.mood >= 1;
   const interestsReady = inputs.interests.length > 0;
-  const ready = moodReady && interestsReady && status !== 'loading';
-
-  async function generate() {
-    if (!ready) return;
-    setStatus('loading');
-    setError(null);
-    try {
-      const prompt = buildPrompt({
-        mood: inputs.mood,
-        interests: inputs.interests,
-        habitRate: inputs.habitRate ?? 0,
-      });
-      const raw = await callClaudeAPI(prompt);
-      const podcasts = parsePodcasts(raw);
-      const payload = {
-        date: todayISO(),
-        podcasts,
-        raw,
-        inputs: {
-          mood: inputs.mood,
-          interests: inputs.interests,
-          habitRate: inputs.habitRate ?? 0,
-        },
-      };
-      localStorage.setItem(CACHE_KEY, JSON.stringify(payload));
-      setResult(payload);
-      setStatus('success');
-    } catch (e) {
-      setError(e.message || String(e));
-      setStatus('error');
-    }
-  }
+  const showResults = status === 'success' && result?.podcasts?.length > 0;
 
   return (
-    <section className="mx-auto max-w-3xl">
-      <div className="animate-fade-in">
-        <p className="jarvis-subtitle text-xs">// MODULE_05</p>
-        <h1 className="jarvis-title mt-1 text-3xl">CONTENT</h1>
-        <div className="jarvis-divider mt-3" />
-      </div>
+    <section className="mx-auto max-w-3xl space-y-4">
+      <header className="animate-fade-in pt-2">
+        <p className="app-eyebrow">今日のおすすめ</p>
+        <h1 className="app-title mt-0.5 text-2xl">Podcastを探す</h1>
+      </header>
 
-      <div
-        className="animate-fade-in mt-6"
-        style={{ animationDelay: '60ms' }}
-      >
-        <header className="flex items-baseline justify-between">
-          <div>
-            <p className="jarvis-subtitle text-[11px]">
-              // PODCAST_RECOMMENDER · {todayISO()}
-            </p>
-            <h2 className="font-display text-xl tracking-[0.18em] text-jarvis-accent">
-              今の私に合うPodcast
-            </h2>
-          </div>
-          {status === 'success' && (
-            <button
-              type="button"
-              onClick={generate}
-              disabled={!ready}
-              className="flex items-center gap-1 border border-jarvis-border bg-jarvis-panel/60 px-2.5 py-1 font-display text-[10px] uppercase tracking-[0.22em] text-jarvis-dim transition hover:border-jarvis-cyan/60 hover:text-jarvis-accent disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <RefreshCw size={11} strokeWidth={2} />
-              <span>再取得</span>
-            </button>
-          )}
-        </header>
+      <InputSummary inputs={inputs} />
 
-        <InputsBar inputs={inputs} />
+      {!interestsReady && (
+        <Prerequisite />
+      )}
 
-        {!moodReady || !interestsReady ? (
-          <Prerequisite
-            moodReady={moodReady}
-            interestsReady={interestsReady}
-          />
-        ) : status === 'idle' ? (
-          <GenerateButton onClick={generate} />
-        ) : status === 'loading' ? (
-          <LoadingPanel />
-        ) : status === 'error' ? (
-          <ErrorPanel error={error} onRetry={generate} />
-        ) : (
-          <Results result={result} />
-        )}
-      </div>
+      {interestsReady && status === 'idle' && (
+        <GenerateBlock onGenerate={generate} />
+      )}
+
+      {status === 'loading' && <LoadingPanel />}
+
+      {status === 'error' && (
+        <ErrorPanel error={error} onRetry={generate} />
+      )}
+
+      {showResults && (
+        <Results
+          result={result}
+          onRefresh={generate}
+          regenerating={status === 'loading'}
+        />
+      )}
     </section>
   );
 }
 
-function InputsBar({ inputs }) {
+function InputSummary({ inputs }) {
   const items = [
     {
       label: '気分',
-      en: 'MOOD',
-      value: inputs.mood !== null ? `${inputs.mood} / 5` : '—',
-      ok: inputs.mood !== null,
+      value: inputs.mood ? `${inputs.mood}/5` : '—',
+      ok: inputs.mood != null,
     },
     {
       label: '興味',
-      en: 'INTERESTS',
-      value: inputs.interests || '—',
+      value: inputs.interests || '未設定',
       ok: inputs.interests.length > 0,
     },
     {
-      label: '習慣',
-      en: 'HABIT_RATE',
-      value: inputs.habitRate !== null ? `${inputs.habitRate}%` : '—',
+      label: '達成率',
+      value: inputs.habitRate != null ? `${inputs.habitRate}%` : '—',
       ok: true,
     },
   ];
 
   return (
-    <ul className="mt-3 grid grid-cols-3 gap-2">
+    <ul className="grid grid-cols-3 gap-2">
       {items.map((it) => (
         <li
-          key={it.en}
+          key={it.label}
           className={[
-            'border bg-jarvis-panel/40 px-3 py-2 transition',
+            'rounded-card border p-3 transition',
             it.ok
-              ? 'border-jarvis-border'
-              : 'border-amber-300/40 bg-amber-300/5',
+              ? 'border-app-border bg-app-panel/60'
+              : 'border-app-rose/30 bg-app-rose/5',
           ].join(' ')}
         >
-          <p className="font-display text-[10px] tracking-[0.22em] text-jarvis-cyan">
-            {it.en}
-          </p>
-          <p className="jarvis-subtitle text-[9px]">{it.label}</p>
+          <p className="text-[11px] text-app-dim">{it.label}</p>
           <p
             className={[
-              'mt-0.5 truncate font-mono text-[12px]',
-              it.ok ? 'text-jarvis-accent' : 'text-amber-200',
+              'mt-1 truncate text-[13px]',
+              it.ok ? 'text-app-text' : 'text-app-rose/90',
             ].join(' ')}
             title={it.value}
           >
@@ -294,50 +109,48 @@ function InputsBar({ inputs }) {
   );
 }
 
-function Prerequisite({ moodReady, interestsReady }) {
+function Prerequisite() {
   return (
-    <div className="jarvis-panel mt-3 flex items-start gap-3 p-4">
-      <AlertTriangle
-        size={18}
-        strokeWidth={1.75}
-        className="mt-0.5 shrink-0 text-amber-300/80"
-      />
-      <div className="space-y-1 text-sm">
-        <p className="font-display text-[11px] tracking-[0.22em] text-amber-200/80">
-          DATA_INSUFFICIENT
+    <div className="app-card flex items-start gap-3 p-4">
+      <AlertTriangle size={16} className="mt-0.5 shrink-0 text-app-amber" />
+      <div>
+        <p className="app-eyebrow">情報が足りません</p>
+        <p className="mt-1 text-[13px] text-app-text-soft">
+          Settingsで「興味」を入力するとあなた向けのPodcastを提案できます。
         </p>
-        <ul className="space-y-0.5 font-body text-jarvis-text/80">
-          {!moodReady && <li>・Homeで今日の状態を記録してください</li>}
-          {!interestsReady && <li>・Settingsで興味を入力してください</li>}
-        </ul>
       </div>
     </div>
   );
 }
 
-function GenerateButton({ onClick }) {
+function GenerateBlock({ onGenerate }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="group relative mt-3 flex w-full items-center justify-center gap-2 overflow-hidden border border-jarvis-cyan bg-jarvis-cyan/10 px-5 py-3 font-display text-sm font-semibold uppercase tracking-[0.28em] text-jarvis-accent shadow-glow transition hover:bg-jarvis-cyan/20"
-    >
-      <span
-        aria-hidden
-        className="pointer-events-none absolute inset-y-0 left-0 w-1/3 -skew-x-12 bg-gradient-to-r from-transparent via-jarvis-cyan/30 to-transparent animate-sweep"
-      />
-      <Search size={16} strokeWidth={2.25} className="animate-pulse-glow" />
-      <span>今の私に合うPodcastを探す</span>
-    </button>
+    <div className="app-card p-5">
+      <div className="flex items-start gap-3">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-app-amber/10 text-app-amber">
+          <Headphones size={18} strokeWidth={1.75} />
+        </span>
+        <div>
+          <p className="app-eyebrow">AIが選びます</p>
+          <p className="mt-1 text-[14px] text-app-text-soft">
+            あなたの今日の状態と興味から、最適な番組を1〜3件選びます。
+          </p>
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={onGenerate}
+        className="app-btn-primary mt-4 w-full"
+      >
+        <Search size={14} />
+        <span>Podcastを探す</span>
+      </button>
+    </div>
   );
 }
 
 function LoadingPanel() {
-  const phases = [
-    'ANALYZING USER STATE',
-    'MATCHING INTERESTS',
-    'CURATING PODCASTS',
-  ];
+  const phases = ['気分を確認中', '興味を解析中', '番組を選定中'];
   const [phase, setPhase] = useState(0);
   useEffect(() => {
     const t = setInterval(() => setPhase((p) => (p + 1) % phases.length), 900);
@@ -345,34 +158,15 @@ function LoadingPanel() {
   }, []);
 
   return (
-    <div className="jarvis-panel relative mt-3 overflow-hidden p-5">
-      <span
-        aria-hidden
-        className="pointer-events-none absolute inset-y-0 left-0 w-1/3 -skew-x-12 bg-gradient-to-r from-transparent via-jarvis-cyan/25 to-transparent animate-sweep"
-      />
-      <div className="relative flex items-center gap-3">
-        <Loader2
-          size={22}
-          strokeWidth={2}
-          className="animate-spin text-jarvis-cyan drop-shadow-[0_0_6px_rgba(0,229,255,0.7)]"
-        />
-        <div className="min-w-0 flex-1">
-          <p className="font-display text-[11px] tracking-[0.22em] text-jarvis-cyan">
-            JARVIS // SCANNING
-          </p>
-          <p
-            key={phase}
-            className="animate-fade-in mt-0.5 font-mono text-[12px] text-jarvis-accent"
-          >
-            {phases[phase]}
-            <span className="ml-1 inline-block w-2 animate-pulse-glow">_</span>
-          </p>
-        </div>
+    <div className="app-card p-5">
+      <div className="flex items-center gap-3">
+        <Loader2 size={20} className="animate-spin text-app-amber" />
+        <p className="text-[14px] text-app-text-soft">{phases[phase]}…</p>
       </div>
-      <div className="relative mt-4 space-y-2">
-        <div className="h-2 w-3/4 animate-pulse-glow bg-jarvis-cyan/15" />
-        <div className="h-2 w-1/2 animate-pulse-glow bg-jarvis-cyan/10" />
-        <div className="h-2 w-2/3 animate-pulse-glow bg-jarvis-cyan/15" />
+      <div className="mt-4 space-y-2">
+        <div className="h-2 w-3/4 rounded-full bg-app-amber/10" />
+        <div className="h-2 w-1/2 rounded-full bg-app-amber/10" />
+        <div className="h-2 w-2/3 rounded-full bg-app-amber/10" />
       </div>
     </div>
   );
@@ -380,119 +174,83 @@ function LoadingPanel() {
 
 function ErrorPanel({ error, onRetry }) {
   return (
-    <div className="jarvis-panel mt-3 flex flex-col gap-3 border-red-400/40 p-4">
+    <div className="app-card border-app-rose/40 p-4">
       <div className="flex items-start gap-2">
-        <AlertTriangle
-          size={16}
-          strokeWidth={1.75}
-          className="mt-0.5 shrink-0 text-red-300"
-        />
+        <AlertTriangle size={16} className="mt-0.5 shrink-0 text-app-rose" />
         <div className="min-w-0 flex-1">
-          <p className="font-display text-[11px] tracking-[0.22em] text-red-300">
-            FETCH_FAILED
-          </p>
-          <p className="mt-1 break-words font-mono text-[12px] text-jarvis-text/80">
+          <p className="app-eyebrow text-app-rose">取得失敗</p>
+          <p className="mt-1 break-words text-[13px] text-app-text-soft">
             {error}
           </p>
         </div>
       </div>
-      <button
-        type="button"
-        onClick={onRetry}
-        className="self-start border border-jarvis-border bg-jarvis-panel/60 px-3 py-1.5 font-display text-[11px] uppercase tracking-[0.22em] text-jarvis-dim transition hover:border-jarvis-cyan/60 hover:text-jarvis-accent"
-      >
-        再試行 · RETRY
+      <button type="button" onClick={onRetry} className="app-btn-ghost mt-3">
+        再試行
       </button>
     </div>
   );
 }
 
-function Results({ result }) {
-  const podcasts = result?.podcasts || [];
-
-  if (podcasts.length === 0) {
-    return (
-      <div
-        className="jarvis-panel animate-glow-in relative mt-3 overflow-hidden p-5"
-        style={{ animationDelay: '60ms' }}
-      >
-        <span
-          aria-hidden
-          className="pointer-events-none absolute inset-y-0 left-0 w-1/3 -skew-x-12 bg-gradient-to-r from-transparent via-jarvis-cyan/15 to-transparent animate-sweep"
-        />
-        <p className="relative font-display text-[11px] tracking-[0.24em] text-amber-300">
-          PARSE_FAILED
-        </p>
-        <p className="relative jarvis-subtitle mt-1 text-[10px]">
-          // 構造化レスポンスの抽出に失敗。生レスポンスを表示します。
-        </p>
-        <p className="relative mt-3 whitespace-pre-wrap font-body text-sm text-jarvis-text">
-          {result?.raw || ''}
-        </p>
-      </div>
-    );
-  }
-
+function Results({ result, onRefresh, regenerating }) {
   return (
-    <ul className="mt-3 space-y-3">
-      {podcasts.map((p, i) => (
-        <li
-          key={`${p.title}-${i}`}
-          className="animate-fade-in"
-          style={{ animationDelay: `${120 + i * 100}ms` }}
+    <div className="space-y-3">
+      <header className="flex items-center justify-between">
+        <p className="text-[12px] text-app-dim">
+          {result.date} に取得 · {result.podcasts.length} 件
+        </p>
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={regenerating}
+          className="app-btn-ghost text-[12px]"
         >
-          <PodcastCard rank={i + 1} podcast={p} />
-        </li>
+          <RefreshCw size={12} />
+          <span>再取得</span>
+        </button>
+      </header>
+
+      {result.podcasts.map((p, i) => (
+        <PodcastCard key={`${p.title}-${i}`} rank={i + 1} podcast={p} />
       ))}
-    </ul>
+    </div>
   );
 }
 
 function PodcastCard({ rank, podcast }) {
   return (
-    <article className="jarvis-panel relative overflow-hidden p-5">
-      <span
-        aria-hidden
-        className="pointer-events-none absolute inset-y-0 left-0 w-1/4 -skew-x-12 bg-gradient-to-r from-transparent via-jarvis-cyan/10 to-transparent animate-sweep"
-      />
-      <header className="relative flex items-start gap-3">
-        <span
-          className="flex h-10 w-10 shrink-0 items-center justify-center border border-jarvis-cyan bg-jarvis-cyan/10 font-mono text-[13px] font-bold tabular-nums text-jarvis-accent shadow-glow-soft"
-          aria-label={`#${rank}`}
-        >
+    <article className="app-card animate-fade-in p-5">
+      <header className="flex items-start gap-3">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-app-amber/10 font-mono text-[12px] font-semibold text-app-amber">
           {String(rank).padStart(2, '0')}
         </span>
         <div className="min-w-0 flex-1">
-          <p className="flex items-center gap-2 font-display text-[10px] tracking-[0.24em] text-jarvis-cyan">
-            <Headphones size={11} strokeWidth={2} />
-            <span>PODCAST</span>
+          <p className="app-eyebrow flex items-center gap-1.5">
+            <Headphones size={11} className="text-app-fog" />
+            Podcast
           </p>
-          <h3
-            className="mt-1 font-display text-[18px] leading-snug text-jarvis-accent"
-            style={{ textShadow: '0 0 6px rgba(0, 229, 255, 0.4)' }}
-          >
+          <h3 className="mt-1 text-[17px] font-semibold leading-snug text-app-text">
             {podcast.title}
           </h3>
-          {podcast.duration ? (
-            <p className="mt-2 inline-flex items-center gap-1 border border-jarvis-border bg-jarvis-panel/60 px-2 py-0.5 font-mono text-[11px] tabular-nums text-jarvis-dim">
-              <Clock size={11} strokeWidth={2} className="text-jarvis-cyan" />
-              <span>{podcast.duration}</span>
+          {podcast.duration && (
+            <p className="mt-2 inline-flex items-center gap-1 rounded-chip bg-app-bg-elev px-2.5 py-0.5 text-[11px] text-app-dim">
+              <Clock size={11} className="text-app-fog" />
+              {podcast.duration}
             </p>
-          ) : null}
+          )}
         </div>
       </header>
 
-      {podcast.reason ? (
-        <div className="relative mt-4 border-l-2 border-jarvis-cyan/60 pl-3">
-          <p className="flex items-center gap-1 font-display text-[10px] tracking-[0.22em] text-jarvis-cyan">
-            <Sparkles size={11} strokeWidth={2} />
-            <span>WHY · 推薦理由</span>
+      {podcast.reason && (
+        <div className="mt-4 border-l-2 border-app-amber/50 pl-3">
+          <p className="app-eyebrow flex items-center gap-1.5 text-app-amber">
+            <Sparkles size={11} />
+            選んだ理由
           </p>
-          <p className="mt-1 font-body text-sm leading-relaxed text-jarvis-text">
+          <p className="mt-1 text-[14px] leading-relaxed text-app-text-soft">
             {podcast.reason}
           </p>
         </div>
-      ) : null}
+      )}
     </article>
   );
 }
