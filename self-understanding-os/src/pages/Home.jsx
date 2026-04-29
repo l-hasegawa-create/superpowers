@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   Activity,
-  ArrowRight,
   BatteryCharging,
   Check,
   ChevronDown,
@@ -277,13 +277,13 @@ function MessageCard({ message, ideal, onUpdated }) {
         <p className="mt-3 text-sm text-app-text-soft">
           理想像を診断するとあなた向けの言葉が届きます。
         </p>
-        <a
-          href="/settings"
+        <Link
+          to="/settings"
           className="mt-3 inline-flex items-center gap-1 text-sm text-app-amber hover:text-app-amber-soft"
         >
           Settingsで診断する
           <ChevronRight size={14} />
-        </a>
+        </Link>
       </div>
     );
   }
@@ -380,8 +380,8 @@ function PodcastCard({ podcast }) {
   const top = podcast?.podcasts?.[0];
   if (!top) {
     return (
-      <a
-        href="/content"
+      <Link
+        to="/content"
         className="app-card animate-fade-in flex items-center gap-3 p-4 transition hover:border-app-border-soft"
         style={{ animationDelay: '120ms' }}
       >
@@ -395,13 +395,13 @@ function PodcastCard({ podcast }) {
           </p>
         </div>
         <ChevronRight size={16} className="text-app-dim" />
-      </a>
+      </Link>
     );
   }
 
   return (
-    <a
-      href="/content"
+    <Link
+      to="/content"
       className="app-card animate-fade-in block p-5 transition hover:border-app-border-soft"
       style={{ animationDelay: '120ms' }}
     >
@@ -430,14 +430,14 @@ function PodcastCard({ podcast }) {
           {top.reason}
         </p>
       )}
-    </a>
+    </Link>
   );
 }
 
 function IdealTile({ ideal }) {
   return (
-    <a
-      href="/settings"
+    <Link
+      to="/settings"
       className="app-card animate-fade-in block p-4 transition hover:border-app-border-soft"
       style={{ animationDelay: '160ms' }}
     >
@@ -457,7 +457,7 @@ function IdealTile({ ideal }) {
       ) : (
         <p className="mt-2 text-[13px] text-app-text-soft">未診断</p>
       )}
-    </a>
+    </Link>
   );
 }
 
@@ -470,8 +470,8 @@ function HabitTile({ habit }) {
   }, [target]);
 
   return (
-    <a
-      href="/habit"
+    <Link
+      to="/habit"
       className="app-card animate-fade-in block p-4 transition hover:border-app-border-soft"
       style={{ animationDelay: '160ms' }}
     >
@@ -503,7 +503,7 @@ function HabitTile({ habit }) {
       ) : (
         <p className="mt-2 text-[13px] text-app-text-soft">習慣を追加</p>
       )}
-    </a>
+    </Link>
   );
 }
 
