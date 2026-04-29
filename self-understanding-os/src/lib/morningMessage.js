@@ -1,11 +1,9 @@
 import { pickFamousPersonForToday } from './famousPeople.js';
+import { callGemini } from './geminiClient.js';
 
 const MORNING_KEY = 'morningMessage';
 
-const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
-const ANTHROPIC_MODEL = 'claude-sonnet-4-20250514';
-
-const SYSTEM_PROMPT = `あなたは応援メッセンジャーです。応答はJSONオブジェクトのみで返してください。コードブロック・前置き・説明文は含めないでください。
+const SYSTEM_PROMPT = `あなたは応援メッセンジャーです。応答はJSONオブジェクトのみで返してください。
 
 スキーマ:
 {"quote":"著名人の言葉（実在のもの）","attribution":"著名人名","action":"今日できる具体的アクション（30字以内）"}
@@ -31,41 +29,6 @@ function parseJSON(text) {
   }
 }
 
-async function callClaude(userPrompt) {
-  const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    throw new Error('APIキー未設定');
-  }
-  const res = await fetch(ANTHROPIC_API_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
-    },
-    body: JSON.stringify({
-      model: ANTHROPIC_MODEL,
-      max_tokens: 600,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: userPrompt }],
-    }),
-  });
-  if (!res.ok) {
-    let detail = '';
-    try {
-      const err = await res.json();
-      detail = err?.error?.message || '';
-    } catch {
-      /* ignore */
-    }
-    throw new Error(detail || `API error ${res.status}`);
-  }
-  const data = await res.json();
-  const block = data.content?.find((b) => b.type === 'text');
-  return block?.text ?? '';
-}
-
 export async function generateMorningMessage(ideal) {
   if (!ideal || !ideal.type) {
     throw new Error('理想像が設定されていません');
@@ -75,7 +38,11 @@ export async function generateMorningMessage(ideal) {
 ${person}（${ideal.typeLabel}の代表格）の言葉を一つ実在の名言から引用し、そこから今日の具体的な行動を一つ提案してください。
 全体100文字以内・抽象的すぎない・JSON形式で返答。`;
 
-  const raw = await callClaude(prompt);
+  const raw = await callGemini({
+    system: SYSTEM_PROMPT,
+    user: prompt,
+    maxOutputTokens: 600,
+  });
   const parsed = parseJSON(raw) || {};
   const payload = {
     quote: String(parsed.quote || '').trim(),
